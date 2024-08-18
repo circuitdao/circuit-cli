@@ -9,6 +9,11 @@ readme = "README.md"
 python = "^3.12"
 httpx = "^0.27.0"
 chia-blockchain = "^2.4.1rc1"
+python-okx-async = "^0.1.1"
+autobahn = "^23.6.2"
+service-identity = "^24.1.0"
+python-dotenv = "^1.0.1"
+coinbase-advanced-py = "^1.4.2"
 
 
 [build-system]

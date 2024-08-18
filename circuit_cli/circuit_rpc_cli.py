@@ -64,7 +64,7 @@ async def cli():
     )
     parser.add_argument("--add-sig-data", type=str, help="Additional signature data")
     parser.add_argument(
-        "--private_key", "-p", type=str, default=os.environ.get("PRIVATE_KEY"), help="Private key for your coins"
+        "--private-key", "-p", type=str, default=os.environ.get("PRIVATE_KEY"), help="Private key for your coins"
     )
     upkeep_parser = subparsers.add_parser("upkeep", help="Commands to upkeep protocol and RPC server")
     upkeep_subparsers = upkeep_parser.add_subparsers(dest="action")
@@ -137,7 +137,10 @@ async def cli():
 
     oracle_parser = subparsers.add_parser("oracle", help="Oracle commands")
     oracle_subparsers = oracle_parser.add_subparsers(dest="action")
+
     oracle_subparsers.add_parser("update", help="Update the oracle price")
+    oracle_subparsers.add_parser("show", help="Show the oracle price")
+
     statutes_parser = subparsers.add_parser("statutes", help="Manage statutes")
     statutes_subparsers = statutes_parser.add_subparsers(dest="action")
     statutes_subparsers.add_parser("list", help="List all statutes")
@@ -145,11 +148,19 @@ async def cli():
 
     vault_parser = subparsers.add_parser("vault", help="Manage a collateral vault")
     vault_subparsers = vault_parser.add_subparsers(dest="action")
-    borrow_subparser = vault_subparsers.add_parser("borrow", help="Borrow from the vault")
-    borrow_subparser.add_argument("--amount", type=int, help="Amount to borrow")
 
     deposit_subparser = vault_subparsers.add_parser("deposit", help="Deposit to the vault")
     deposit_subparser.add_argument("--amount", type=int, help="Amount to deposit")
+
+    withdraw_subparser = vault_subparsers.add_parser("withdraw", help="Withdraw from the vault")
+    withdraw_subparser.add_argument("--amount", type=int, help="Amount to withdraw")
+
+    borrow_subparser = vault_subparsers.add_parser("borrow", help="Borrow from the vault")
+    borrow_subparser.add_argument("--amount", type=int, help="Amount to borrow")
+
+    repay_subparser = vault_subparsers.add_parser("repay", help="Repay the vault")
+    repay_subparser.add_argument("--amount", type=int, help="Amount to repay")
+
     vault_subparsers.add_parser("show", help="Show the vault")
 
     args = parser.parse_args()

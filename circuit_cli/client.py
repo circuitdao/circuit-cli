@@ -6,10 +6,11 @@ from chia.util.bech32m import encode_puzzle_hash
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
     puzzle_hash_for_synthetic_public_key,
 )
-from chia_rs import PrivateKey
+from chia_rs import PrivateKey, Coin
 
 from circuit_cli.utils import generate_ssks, sign_spends
 
+from pprint import pprint
 
 class CircuitRPCClient:
     # TODO: add support for fees across all methods
@@ -39,6 +40,7 @@ class CircuitRPCClient:
                 return True
             elif data["status"] == "failed":
                 raise ValueError("Transaction failed")
+            print("Still waiting for confirmation...")
             await asyncio.sleep(30)
 
     async def sign_and_push(self, bundle: SpendBundle):
@@ -53,6 +55,7 @@ class CircuitRPCClient:
                 "bundle_dict": signed_bundle.to_json_dict(),
                 "signature": signed_bundle.aggregated_signature.to_bytes().hex(),
             },
+            timeout=30
         )
         if response.status_code != 200:
             print(response.content)
@@ -71,41 +74,65 @@ class CircuitRPCClient:
         )
         return response.json()
 
-    async def vault_deposit(self, args):
+    async def vault_deposit(self, amount):
         response = self.client.post(
             "/vault/deposit",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                "amount": args.amount,
+                "amount": amount,
             },
         )
         bundle: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
         sig_response = await self.sign_and_push(bundle)
-        return sig_response.json()
+        return sig_response
 
-    async def vault_borrow(self, args):
+    async def vault_withdraw(self, amount):
+        response = self.client.post(
+            "/vault/withdraw",
+            json={
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                "amount": amount,
+            },
+        )
+        bundle: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
+        sig_response = await self.sign_and_push(bundle)
+        return sig_response
+
+    async def vault_borrow(self, amount):
         response = self.client.post(
             "/vault/borrow",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                "amount": args.amount,
+                "amount": amount,
             },
         )
         bundle: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
         sig_response = await self.sign_and_push(bundle)
-        return sig_response.json()
+        return sig_response
 
-    async def protocol_statutes(self):
-        response = self.client.get("/statutes")
-        return response.json()
+    async def vault_repay(self, amount):
+        response = self.client.post(
+            "/vault/repay",
+            json={
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                "amount": amount,
+            },
+        )
+        bundle: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
+        sig_response = await self.sign_and_push(bundle)
+        return sig_response
 
-    async def vault_show(self, args):
+    async def vault_show(self):
         response = self.client.post(
             "/vault",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
             },
         )
+        return response.json()
+
+    async def protocol_statutes(self):
+        response = self.client.get("/statutes")
         return response.json()
 
     async def announcer_launch(self, price):
@@ -248,6 +275,19 @@ class CircuitRPCClient:
         data = response.json()
         bundle = SpendBundle.from_json_dict(data)
         return await self.sign_and_push(bundle)
+
+    async def oracle_show(self):
+        response = self.client.post(
+            "/oracle/announce/",
+            json={
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+            },
+        )
+        data = response.json()
+        coin = Coin.from_json_dict(data["bundle"]["coin_spends"][0]["coin"])
+        data["name"] = coin.name().hex()
+        del data["bundle"]
+        return data
 
     async def statutes_list(self):
         response = self.client.get(
