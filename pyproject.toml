@@ -19,3 +19,9 @@ build-backend = "poetry.core.masonry.api"
 circuit-cli = "circuit_cli.circuit_rpc_cli:main"
 price-announcer-cli = "circuit_cli.price_announcer_cli:main"
 keeper-cli = "circuit_cli.keeper_cli:main"
+
+[tool.ruff]
+line-length = 120
+
+[tool.black]
+line-length = 120

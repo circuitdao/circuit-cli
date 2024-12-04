@@ -13,7 +13,7 @@ from circuit_cli.utils import generate_ssks, sign_spends
 
 class CircuitRPCClient:
     # TODO: add support for fees across all methods
-    def __init__(self, base_url: str, private_key: str, add_sig_data: str = None):
+    def __init__(self, base_url: str, private_key: str, add_sig_data: str = None, fee_per_cost: int = 0):
         if private_key:
             secret_key = PrivateKey.from_bytes(bytes.fromhex(private_key))
             synthetic_secret_keys = generate_ssks(secret_key, 0, 500)
@@ -25,28 +25,37 @@ class CircuitRPCClient:
         self.synthetic_public_keys = synthetic_public_keys
         print([encode_puzzle_hash(puzzle_hash_for_synthetic_public_key(x), "txch") for x in synthetic_public_keys[:5]])
         self.base_url = base_url
-        self.client = httpx.Client(base_url=base_url)
+        self.client = httpx.Client(base_url=base_url, timeout=120)
         self.add_sig_data = add_sig_data
+        self.fee_per_cost = fee_per_cost
 
-    async def wait_for_confirmation(self, bundle: SpendBundle):
-        while True:
-            response = self.client.post("/transactions/status", json={"bundle": bundle.to_json_dict()})
-            if response.status_code != 200:
+    async def wait_for_confirmation(self, bundle: SpendBundle = None, blocks=None):
+        if bundle is not None and isinstance(bundle, SpendBundle):
+            while True:
+                response = self.client.post("/transactions/status", json={"bundle": bundle.to_json_dict()})
                 print(response.content)
-                response.raise_for_status()
-            data = response.json()
-            if data["status"] == "confirmed":
-                return True
-            elif data["status"] == "failed":
-                raise ValueError("Transaction failed")
-            await asyncio.sleep(30)
+                if response.status_code != 200:
+                    response.raise_for_status()
+                data = response.json()
+                if data["status"] == "confirmed":
+                    return True
+                elif data["status"] == "failed":
+                    raise ValueError("Transaction failed")
+                await asyncio.sleep(5)
+        elif blocks is not None:
+            await asyncio.sleep(blocks * 55)
+        else:
+            raise ValueError("Either bundle or blocks must be provided")
 
     async def sign_and_push(self, bundle: SpendBundle):
+        print("USING ADDITIONAL SIGNATURE DATA", self.add_sig_data)
         signed_bundle = await sign_spends(
             bundle.coin_spends,
             self.synthetic_secret_keys,
             add_data=self.add_sig_data,
         )
+
+        assert isinstance(signed_bundle, SpendBundle)
         response = self.client.post(
             "/sign_and_push",
             json={
@@ -54,10 +63,13 @@ class CircuitRPCClient:
                 "signature": signed_bundle.aggregated_signature.to_bytes().hex(),
             },
         )
+        json_resp = response.json()
+        print("Got response from sign and push", response.status_code, json_resp)
         if response.status_code != 200:
-            print(response.content)
+            print("Error from sign and push:", response.content)
             response.raise_for_status()
-        return response.json()
+        print("Returning signed bundle")
+        return json_resp
 
     async def wallet_balances(self):
         response = self.client.post(
@@ -77,6 +89,7 @@ class CircuitRPCClient:
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "amount": args.amount,
+                "fee_per_cost": self.fee_per_cost,
             },
         )
         bundle: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
@@ -89,6 +102,7 @@ class CircuitRPCClient:
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "amount": args.amount,
+                "fee_per_cost": self.fee_per_cost,
             },
         )
         bundle: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
@@ -115,17 +129,50 @@ class CircuitRPCClient:
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "operation": "launch",
                 "args": {"price": price},
+                "fee_per_cost": self.fee_per_cost,
             },
         )
-        print(response.content)
-        bundle: SpendBundle = SpendBundle.from_json_dict(response.json())
+        bundle_json = response.json()
+        bundle: SpendBundle = SpendBundle.from_json_dict(bundle_json)
         sig_response = await self.sign_and_push(bundle)
-        await self.wait_for_confirmation(bundle)
+        signed_bundle = SpendBundle.from_json_dict(sig_response["bundle"])
+        await self.wait_for_confirmation(signed_bundle)
         return sig_response
 
-    async def announcer_mutate(
-        self, coin_name, price, amount=None, inner_puzzle_hash=None, delay=None, deactivate=None
-    ):
+    async def announcer_configure(self, coin_name, amount=None, inner_puzzle_hash=None, delay=None, deactivate=None):
+        if not coin_name:
+            response = self.client.post(
+                "/announcers/",
+                json={
+                    "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                },
+            )
+            data = response.json()
+            coin_name = data[0]["name"]
+        else:
+            coin_name = coin_name
+
+        response = self.client.post(
+            "/announcers/" + coin_name,
+            json={
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                "operation": "configure",
+                "args": {
+                    "new_amount": amount,
+                    "new_inner_puzzle_hash": inner_puzzle_hash,
+                    "new_delay": delay,
+                    "deactivate": deactivate,
+                },
+                "fee_per_cost": self.fee_per_cost,
+            },
+        )
+        data = response.json()
+        print("Got bundle, signing and pushing", data)
+        bundle: SpendBundle = SpendBundle.from_json_dict(data)
+        sig_response = await self.sign_and_push(bundle)
+        return sig_response
+
+    async def announcer_mutate(self, coin_name, price):
         if not coin_name:
             response = self.client.post(
                 "/announcers/",
@@ -145,11 +192,8 @@ class CircuitRPCClient:
                 "operation": "mutate",
                 "args": {
                     "new_price": price,
-                    "new_deposit": amount,
-                    "new_inner_puzzle_hash": inner_puzzle_hash,
-                    "new_delay": delay,
-                    "deactivate": deactivate,
                 },
+                "fee_per_cost": self.fee_per_cost,
             },
         )
         bundle: SpendBundle = SpendBundle.from_json_dict(response.json())
@@ -159,6 +203,31 @@ class CircuitRPCClient:
     async def upkeep_sync(self):
         response = self.client.post("/sync_chain_data")
         return response.json()
+
+    async def upkeep_vaults(self):
+        response = self.client.get("/vaults")
+        return response.json()
+
+    async def upkeep_transfer_sf(self, vault_id):
+        response = self.client.post(
+            "/vaults/transfer_stability_fees",
+            json={
+                "vault_name": vault_id,
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                "fee_per_cost": self.fee_per_cost,
+            },
+            headers={"Content-Type": "application/json"},
+        )
+        if response.is_error:
+            print(response.content)
+            response.raise_for_status()
+        bundle = response.json()
+        if bundle.get("detail"):
+            return bundle
+        print("Got bundle, signing and pushing", bundle)
+        signed_bundle_json = await self.sign_and_push(SpendBundle.from_json_dict(bundle))
+        await self.wait_for_confirmation(SpendBundle.from_json_dict(signed_bundle_json["bundle"]))
+        return {"status": "confirmed"}
 
     async def announcer_list(self, **args):
         response = self.client.post(
@@ -185,6 +254,7 @@ class CircuitRPCClient:
         return response.json()
 
     async def bills_toggle(self, coin_name: str, set_governance: bool = False):
+        print("Fee per cost", self.fee_per_cost)
         if set_governance is None:
             set_governance = False
         response = self.client.post(
@@ -193,6 +263,7 @@ class CircuitRPCClient:
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "coin_name": coin_name,
                 "set_governance": set_governance,
+                "fee_per_cost": self.fee_per_cost,
             },
         )
         bundle = response.json()
@@ -220,6 +291,7 @@ class CircuitRPCClient:
                 "delay_seconds": delay_seconds,
                 "max_delta": max_delta,
                 "statute_index": statute_index,
+                "fee_per_cost": self.fee_per_cost,
             },
         )
         print("Got bundle, posting new bill")
@@ -230,24 +302,21 @@ class CircuitRPCClient:
         sig_response = await self.sign_and_push(SpendBundle.from_json_dict(bundle))
         return sig_response
 
-    def govern_veto_bill(self, key: str):
-        response = self.client.post("/govern/veto_bill", json={"key": key})
-        print(response)
-
-    def govern_enact_bill(self, key: str):
-        response = self.client.post("/govern/enact_bill", json={"key": key})
-        print(response)
-
     async def oracle_update(self):
         response = self.client.post(
             "/oracle/",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                "fee_per_cost": self.fee_per_cost,
             },
         )
         data = response.json()
-        bundle = SpendBundle.from_json_dict(data)
-        return await self.sign_and_push(bundle)
+        try:
+            bundle = SpendBundle.from_json_dict(data)
+            return await self.sign_and_push(bundle)
+        except:
+            print("Failed to update oracle", data)
+            raise ValueError("Failed to update oracle")
 
     async def statutes_list(self):
         response = self.client.get(
@@ -261,11 +330,41 @@ class CircuitRPCClient:
             "/statutes/price/",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                "fee_per_cost": self.fee_per_cost,
             },
         )
-        data = response.json()
-        bundle = SpendBundle.from_json_dict(data)
-        return await self.sign_and_push(bundle)
+        try:
+            data = response.json()
+        except:
+            error = response.content
+            raise ValueError("Failed to parse response: %s" % error)
+        try:
+            bundle = SpendBundle.from_json_dict(data)
+            return await self.sign_and_push(bundle)
+        except:
+            print("Failed to update statutes", data)
+            raise ValueError("Failed to update statutes")
+
+    async def statutes_announce(self, *args):
+        response = self.client.post(
+            "/statutes",
+            json={
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                "fee_per_cost": self.fee_per_cost,
+            },
+        )
+        try:
+            data = response.json()
+        except:
+            error = response.content
+            raise ValueError("Failed to parse response: %s" % error)
+        try:
+            bundle = SpendBundle.from_json_dict(data["bundle"])
+            print("Announcing statutes", bundle)
+            return await self.sign_and_push(bundle)
+        except:
+            print("Failed to announce statutes", data)
+            raise ValueError("Failed to announce statutes")
 
     async def announcer_propose(self, coin_name, approve, bill_name=None, no_bundle=True, enact=False):
         announcer_name = coin_name
@@ -277,6 +376,7 @@ class CircuitRPCClient:
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                     "coin_name": bill_coin_name,
+                    "fee_per_cost": self.fee_per_cost,
                 },
             )
             print("Got bill, proposing announcer", bill_response.content)
@@ -291,6 +391,7 @@ class CircuitRPCClient:
                         "toggle_activation": approve,
                         "enact_bundle": enact_bundle.to_json_dict(),
                     },
+                    "fee_per_cost": self.fee_per_cost,
                 },
             )
             propose_result = response.json()
@@ -306,6 +407,7 @@ class CircuitRPCClient:
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                     "operation": "govern",
                     "args": {"toggle_activation": approve, "no_bundle": no_bundle},
+                    "fee_per_cost": self.fee_per_cost,
                 },
             )
             bundle = response.json()

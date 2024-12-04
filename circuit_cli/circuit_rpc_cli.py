@@ -9,25 +9,37 @@ from clvm_rs.casts import int_from_bytes
 from circuit_cli.client import CircuitRPCClient
 
 
-async def announcer_fasttrack(rpc_client, price: int, coin_name: str = None):
-    assert price > 1000
-    if not coin_name:
-        resp = await rpc_client.announcer_launch(price=price)
-        bundle = SpendBundle.from_json_dict(resp["bundle"])
-        await rpc_client.wait_for_confirmation(bundle)
+async def get_announcer_name(rpc_client, launcher_id: str = None):
     data = await rpc_client.announcer_list()
-    announcer_coin_name = data[0]["name"]
+    if not launcher_id:
+        return data[0]["launcher_id"], data[0]["name"]
+    for announcer in data:
+        if announcer["launcher_id"] == launcher_id:
+            return launcher_id, announcer["name"]
+    raise ValueError(f"Announcer with launcher_id {launcher_id.hex()} not found")
+
+
+async def announcer_fasttrack(rpc_client, price: int, launcher_id: str = None):
+    assert price > 1000
+    if not launcher_id:
+        print("Launching announcer...")
+        resp = await rpc_client.announcer_launch(price=price)
+        print("Waiting for time to pass to approve announcer (farm blocks if in simulator)...")
+        bundle = SpendBundle.from_json_dict(resp["bundle"])
+        print("Approving announcer...")
+        await rpc_client.wait_for_confirmation(bundle)
+        print("Announcer approved.")
+    launcher_id, coin_name = await get_announcer_name(rpc_client, launcher_id)
     statutes = await rpc_client.protocol_statutes()
     # find min deposit amount
-    print(statutes)
-    min_deposit = int_from_bytes(bytes.fromhex(statutes["enacted_statutes"]["ANNOUNCER_MIN_DEPOSIT"]))
+    min_deposit = int_from_bytes(bytes.fromhex(statutes["enacted_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"]))
+    max_delay = int_from_bytes(bytes.fromhex(statutes["enacted_statutes"]["ANNOUNCER_PRICE_TTL"]))
     custom_ann_statute = statutes["full_enacted_statutes"]["CUSTOM_ANNOUNCEMENTS"]
-    resp = await rpc_client.announcer_mutate(announcer_coin_name, price, amount=min_deposit)
+    resp = await rpc_client.announcer_configure(coin_name, amount=min_deposit + 1000, delay=max_delay - 10)
     bundle = SpendBundle.from_json_dict(resp["bundle"])
     await rpc_client.wait_for_confirmation(bundle)
     # propose announcer
-    data = await rpc_client.announcer_list()
-    announcer_coin_name = data[0]["name"]
+    launcher_id, announcer_coin_name = await get_announcer_name(rpc_client, launcher_id)
     vote_data = await rpc_client.announcer_propose(announcer_coin_name, approve=True, no_bundle=True)
     voting_anns = vote_data["announcements_to_vote_for"]
     bills = await rpc_client.bills_list()
@@ -46,9 +58,9 @@ async def announcer_fasttrack(rpc_client, price: int, coin_name: str = None):
     bills = await rpc_client.bills_list()
     bill_name = bills[0]["name"]
     print("Waiting for time to pass to enact bill (farm blocks if in simulator)...")
-    await asyncio.sleep(30)
-
-    resp = await rpc_client.announcer_propose(announcer_coin_name, approve=True, enact=True, bill_name=bill_name)
+    await rpc_client.wait_for_confirmation(blocks=3)
+    launcher_id, coin_name = await get_announcer_name(rpc_client, launcher_id)
+    resp = await rpc_client.announcer_propose(coin_name, approve=True, enact=True, bill_name=bill_name)
     print("Fasttrack result:")
     return resp
 
@@ -63,6 +75,7 @@ async def cli():
         default="http://localhost:8000",
     )
     parser.add_argument("--add-sig-data", type=str, help="Additional signature data")
+    parser.add_argument("--fee-per-cost", "-fpc", type=str, help="Add transaction fee, set as fee per cost.")
     parser.add_argument(
         "--private_key", "-p", type=str, default=os.environ.get("PRIVATE_KEY"), help="Private key for your coins"
     )
@@ -71,7 +84,9 @@ async def cli():
     upkeep_subparsers.add_parser("status", help="Get the status of the Circuit RPC server")
     upkeep_subparsers.add_parser("version", help="Get the version of the Circuit RPC server")
     upkeep_subparsers.add_parser("sync", help="Sync the Circuit RPC server with the blockchain")
-
+    upkeep_subparsers.add_parser("vaults", help="List all vaults")
+    transfer_sf_parser = upkeep_subparsers.add_parser("transfer_sf", help="Transfer SF to treasury from given vault")
+    transfer_sf_parser.add_argument("--vault-id", type=str, help="Vault id")
     bills_parser = subparsers.add_parser("bills", help="Command to manage bills and governance")
     bills_subparsers = bills_parser.add_subparsers(dest="action")
     propose_bills_parser = bills_subparsers.add_parser("propose", help="Propose a new bill to be enacted")
@@ -86,6 +101,9 @@ async def cli():
 
     enact_subparser = bills_subparsers.add_parser("enact", help="Enact a bill into a statue")
     enact_subparser.add_argument("coin_name", type=str, help="Coin name for the bill")
+
+    reset_bill_subparser = bills_subparsers.add_parser("reset", help="Reset a bill")
+    reset_bill_subparser.add_argument("coin_name", type=str, help="Coin name for the bill")
 
     list_bills = bills_subparsers.add_parser("list", help="List all bills available, either active or unused")
     list_bills.add_argument("--list-all", type=bool, help="List all bills available, either active or unused")
@@ -112,7 +130,7 @@ async def cli():
     )
     launch_approve_parser.add_argument("--price", type=int, help="Initial price")
     launch_approve_parser.add_argument(
-        "--coin-name", type=str, help="Announcer coin name if already launched, but not approved"
+        "--launcher-id", type=str, help="Announcer launcher id if already launched, but not approved"
     )
     announcer_subparsers.add_parser("list", help="List all announcers that belong to given key")
     mutate_parser = announcer_subparsers.add_parser("mutate", help="Mutate the announcer")
@@ -153,7 +171,7 @@ async def cli():
     vault_subparsers.add_parser("show", help="Show the vault")
 
     args = parser.parse_args()
-    rpc_client = CircuitRPCClient(args.base_url, args.private_key)
+    rpc_client = CircuitRPCClient(args.base_url, args.private_key, args.add_sig_data, args.fee_per_cost)
     try:
         kwargs = dict(vars(args))
         print(kwargs)
@@ -162,6 +180,7 @@ async def cli():
         del kwargs["base_url"]
         del kwargs["private_key"]
         del kwargs["add_sig_data"]
+        del kwargs["fee_per_cost"]
         if args.command == "announcer" and args.action == "fasttrack":
             # special case for fasttrack
             result = await announcer_fasttrack(rpc_client, **kwargs)
@@ -170,7 +189,7 @@ async def cli():
             result = await getattr(rpc_client, f"{args.command}_{args.action}")(**kwargs)
 
         pprint.pprint(result)
-    except AttributeError as e:
+    except (AttributeError, KeyError) as e:
         print(e)
         parser.print_help()
     finally:
@@ -178,8 +197,6 @@ async def cli():
 
 
 def main():
-    import asyncio
-
     asyncio.run(cli())
 
 

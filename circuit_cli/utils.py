@@ -98,7 +98,7 @@ async def sign_spends(coin_spends: List[CoinSpend], private_keys: List[PrivateKe
         bundle = SpendBundle(coin_spends, G2Element())
         bundle.debug()
         raise
-    assert bundle
+    assert bundle and isinstance(bundle, SpendBundle)
     return bundle
 
 
