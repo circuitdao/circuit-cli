@@ -12,6 +12,11 @@ pyvenv.cfg
 .venv
 pip-selfcheck.json
 
+# Ignore (Spac)emacs temp files
+**/*~
+**/#*#
+**/.#*
+
 ### Example user template template
 ### Example user template
 
