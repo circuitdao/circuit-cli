@@ -1,12 +1,37 @@
 import argparse
 import asyncio
 import os
+import math
 import pprint
 
 from chia.types.spend_bundle import SpendBundle
 from clvm_rs.casts import int_from_bytes
 
 from circuit_cli.client import CircuitRPCClient
+
+MOJOS = 10**12
+MCAT = 10**3
+PRICE_PRECISION = 10**2
+
+
+def make_human_readable(result: dict) -> dict:
+    for k, v in result.items():
+        if result[k] is not None:
+            if k.lower() in [
+                    "byc", "available_to_borrow", "byc_to_melt_balance", "debt",
+                    "initiator_incentive_balance", "principal", "stability_fees", "total_debt",
+                    "accrued_interest", "savings_balance", "discounted_principal"
+            ]:
+                result[k] = f"{v/MCAT:,} BYC"
+            elif k.lower() in ["crt", "amount"]:
+                result[k] = f"{v/MCAT:,} CRT"
+            elif k.lower() in ["xch", "available_to_withdraw", "collateral"]:
+                result[k] = f"{v/10**12:,} XCH"
+            elif k.lower() in ["collateral_ratio_bps"]:
+                result[k] = "{:.{prec}f}%".format(v/100, prec=2)
+            elif k.lower() in ["price_per_collateral"]:
+                result[k] = "{:.{prec}f} XCH/BYC".format(v/PRICE_PRECISION, prec=math.log10(PRICE_PRECISION))
+    return result
 
 
 async def get_announcer_name(rpc_client, launcher_id: str = None):
@@ -22,7 +47,7 @@ async def get_announcer_name(rpc_client, launcher_id: str = None):
 async def announcer_fasttrack(rpc_client, price: int, launcher_id: str = None):
     print("Fasttracking announcer")
     if not launcher_id:
-        assert price > 1000
+        #assert price > 1000
         print("Launching announcer...")
         resp = await rpc_client.announcer_launch(price=price)
         print("Waiting for time to pass to approve announcer (farm blocks if in simulator)...")
@@ -83,61 +108,82 @@ async def cli():
     parser.add_argument(
         "--private-key", "-p", type=str, default=os.environ.get("PRIVATE_KEY"), help="Private key for your coins"
     )
+
+    ### UPKEEP ###
     upkeep_parser = subparsers.add_parser("upkeep", help="Commands to upkeep protocol and RPC server")
     upkeep_subparsers = upkeep_parser.add_subparsers(dest="action")
-    upkeep_subparsers.add_parser("status", help="Get the status of the Circuit RPC server")
-    upkeep_subparsers.add_parser("version", help="Get the version of the Circuit RPC server")
-    upkeep_subparsers.add_parser("sync", help="Sync the Circuit RPC server with the blockchain")
-    upkeep_subparsers.add_parser("vaults", help="List all vaults")
-    transfer_sf_parser = upkeep_subparsers.add_parser("transfer_sf", help="Transfer SF to treasury from given vault")
-    transfer_sf_parser.add_argument("--vault-id", type=str, help="Vault id")
+
+    ## protocol info ##
+    upkeep_subparsers.add_parser("info", help="Show protocol info", description="Displays BYC and CRT asset IDs.") # LATER: added launcher ID of Statutes (& Oracle?)
+
+    ## protocol state ##
+    upkeep_subparsers.add_parser("state", help="Show protocol state", description="Displays current state of protocol coins that are relevenat for keepers or governance. For SF transfers please see upkeep vaults command")
+    # LATER: show current protocol state. RPC endpoint: /protocol/state
+
+    ## RPC server ##
+    upkeep_rpc_parser = upkeep_subparsers.add_parser("rpc", help="Info on Circuit RPC server")
+    upkeep_rpc_subparsers = upkeep_rpc_parser.add_subparsers(dest="subaction")
+    upkeep_rpc_subparsers.add_parser("status", help="Status of Circuit RPC server") # LATER: implement. display block height and hash synced to.
+    upkeep_rpc_subparsers.add_parser("sync", help="Synchronize Circuit RPC server with Chia blockchain")
+    upkeep_rpc_subparsers.add_parser("version", help="Version of Circuit RPC server")
+
+    ## vaults ##
+    upkeep_vaults_parser = upkeep_subparsers.add_parser("vaults", help="Manage collateral vaults")
+    upkeep_vaults_subparsers = upkeep_vaults_parser.add_subparsers(dest="subaction")
+    upkeep_vaults_show_parser = upkeep_vaults_subparsers.add_parser("show", help="Show all vaults")
+    upkeep_vaults_show_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
+    # LATER: add -o/--ordered arg to order by outstanding SFs
+    upkeep_vaults_transfer_parser = upkeep_vaults_subparsers.add_parser("transfer", help="Transfer stability fees from vault to treasury", description="Transfers stability fees from specified vault to treasury.")
+    upkeep_vaults_transfer_parser.add_argument("COIN_NAME", type=str, help="Vault ID")
 
     ### BILLS ###
     bills_parser = subparsers.add_parser("bills", help="Command to manage bills and governance")
     bills_subparsers = bills_parser.add_subparsers(dest="action")
 
     ## propose ##
-    propose_bills_parser = bills_subparsers.add_parser("propose", help="Propose a new bill to be enacted")
-    propose_bills_parser.add_argument("COIN_NAME", type=str, help="Coin name for the bill")
-    propose_bills_parser.add_argument("--value", type=str, help="Value of the bill")
-    propose_bills_parser.add_argument("--threshold-amount-to-propose", type=int, help="Threshold amount to propose")
-    propose_bills_parser.add_argument("--veto-seconds", type=int, help="Veto seconds")
-    propose_bills_parser.add_argument("--delay-seconds", type=int, help="Delay seconds")
-    propose_bills_parser.add_argument("--max-delta", type=int, help="Max delta")
-    propose_bills_parser.add_argument("--statute-index", type=int, help="Statute index")
-    propose_bills_parser.add_argument("--proposal-times", default=None, type=int, help="Proposal times")
+    bills_propose_parser = bills_subparsers.add_parser("propose", help="Propose a new bill to be enacted")
+    bills_propose_parser.add_argument("COIN_NAME", type=str, help="Coin name for the bill")
+    bills_propose_parser.add_argument("INDEX", type=int, help="Statute index")
+    bills_propose_parser.add_argument("-v", "--value", default=None, type=str, help="Value of bill, eg Statute value. Must be a Program in hex format")
+    bills_propose_parser.add_argument("--proposal-threshold", default=None, type=int, help="Min amount of CRT required to propose new Statute value")
+    bills_propose_parser.add_argument("--veto-seconds", type=int, default=None, help="Veto period in seconds")
+    bills_propose_parser.add_argument("--delay-seconds", type=int, default=None, help="Implementation delay in seconds")
+    bills_propose_parser.add_argument("--max-delta", type=int, default=None, help="Max absolute amount in bps by which Statues value may change")
+    bills_propose_parser.add_argument("--proposal-times", type=int, default=None, help="Proposal times")
 
     ## enact ##
-    enact_subparser = bills_subparsers.add_parser("enact", help="Enact a bill into a statue")
-    enact_subparser.add_argument("COIN_NAME", type=str, help="Coin name for the bill")
+    bills_enact_subparser = bills_subparsers.add_parser("enact", help="Enact a bill into a statue")
+    bills_enact_subparser.add_argument("COIN_NAME", type=str, help="Coin name for the bill")
 
     ## reset ##
-    reset_bill_subparser = bills_subparsers.add_parser("reset", help="Reset a bill", description="Sets bill of a governance coin to nil.")
-    reset_bill_subparser.add_argument("COIN_NAME", type=str, help="Coin name")
+    bills_reset_subparser = bills_subparsers.add_parser("reset", help="Reset a bill", description="Sets bill of a governance coin to nil.")
+    bills_reset_subparser.add_argument("COIN_NAME", type=str, help="Coin name")
 
     ## list ##
-    list_bills = bills_subparsers.add_parser("list", help="List governance coins", description="By default lists unspent goverenance coins of user.")
-    list_bills.add_argument("-a", "--all", action="store_true", help="List all goverenance coins irrespective of who they belong to")
-    list_bills.add_argument("-e", "--empty-only", action="store_true", help="Only list empty governance coins, ie those with bill equal to nil")
-    list_bills.add_argument("--incl-spent", action="store_true", help="Include spent governance coins")
-    #list_bills.add_argument("--list-all", type=bool, help="List all bills available, either active or unused")
+    bills_list_parser = bills_subparsers.add_parser("list", help="List governance coins", description="By default lists unspent goverenance coins of user.")
+    bills_list_parser.add_argument("-a", "--all", action="store_true", help="List all goverenance coins irrespective of who they belong to")
+    bills_list_parser.add_argument("-e", "--empty-only", action="store_true", help="Only list empty governance coins, ie those with bill equal to nil")
+    bills_list_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
+    bills_list_parser.add_argument("--incl-spent", action="store_true", help="Include spent governance coins")
 
     ## toggle governance mode ##
-    toggle_bill_subparser = bills_subparsers.add_parser(
+    bill_toggle_parser = bills_subparsers.add_parser(
         "toggle", help="Convert a plain CRT coin into a governance coin or vice versa",
         description="If coin is in governance mode, convert to plain CRT. If coin is plain CRT, activate governance mode."
     )
-    toggle_bill_subparser.add_argument("COIN_NAME", type=str, help="Coin name")
+    bill_toggle_parser.add_argument("COIN_NAME", type=str, help="Coin name")
 
     ### WALLET ###
     wallet_parser = subparsers.add_parser("wallet", help="Wallet commands")
     wallet_subparsers = wallet_parser.add_subparsers(dest="action")
 
     ## balances ##
-    wallet_subparsers.add_parser("balances", help="Get wallet balances")
+    wallet_balances_parser = wallet_subparsers.add_parser("balances", help="Get wallet balances")
+    wallet_balances_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
 
     ## coins ##
-    wallet_subparsers.add_parser("coins", help="Get wallet coins")
+    wallet_coins_parser = wallet_subparsers.add_parser("coins", help="Get wallet coins")
+    wallet_coins_parser.add_argument("-t", "--type", type=str, choices=["byc", "crt", "xch"], help="Return coins of given type only")
 
     ### ANNOUNCER ###
     announcer_parser = subparsers.add_parser("announcer", help="Announcer commands")
@@ -159,10 +205,11 @@ async def cli():
     ## list ##
     announcer_list_subparser = announcer_subparsers.add_parser("list", help="List announcers", description="By default lists unspent announcers of user, whether approved or not.")
     announcer_list_subparser.add_argument("-a", "--all", action="store_true", help="List all approved announcers irrespective of who they belong to")
+    announcer_list_subparser.add_argument("-v", "--valid-only", action="store_true", help="Only list announcers whose price has not expired")
     announcer_list_subparser.add_argument("--incl-spent", action="store_true", help="Include spent announcer coins")
 
     ## update price ##
-    announcer_update_parser = announcer_subparsers.add_parser("mutate", help="Update announcer price", description="Updates the announcer price. The puzzle automatically updates the expiry timestamp.")
+    announcer_update_parser = announcer_subparsers.add_parser("update", help="Update announcer price", description="Updates the announcer price. The puzzle automatically updates the expiry timestamp.")
     announcer_update_parser.add_argument("-id", "--coin-name", type=str, help="Announcer coin name. Only required if user owns more than one announcer")
     announcer_update_parser.add_argument("PRICE", type=int, help="New announcer price")
 
@@ -195,7 +242,8 @@ async def cli():
     oracle_subparsers.add_parser("show", help="Show oracle prices", description="Shows oracle prices.")
 
     ## update price ##
-    oracle_subparsers.add_parser("update", help="Update oracle price", description="Adds new price to Oracle price queue.")
+    oracle_update_parser = oracle_subparsers.add_parser("update", help="Update oracle price", description="Adds new price to Oracle price queue.")
+    oracle_update_parser.add_argument("-i", "--info", action="store_true", help="Show info on whether Oracle can be updated")
 
     ### STATUTES ###
     statutes_parser = subparsers.add_parser("statutes", help="Manage statutes")
@@ -206,14 +254,16 @@ async def cli():
     statutes_list_subparser.add_argument("--full", action="store_true", help="Show Statutes incl constraints and additional info")
 
     ## update price ##
-    statutes_subparsers.add_parser("update", help="Update Statutes Price")
+    statutes_update_subparser = statutes_subparsers.add_parser("update", help="Update Statutes Price")
+    statutes_update_subparser.add_argument("-i", "--info", action="store_true", help="Show info on when Statues can be updated next")
 
     ### COLLATERAL VAULT ###
     vault_parser = subparsers.add_parser("vault", help="Manage a collateral vault")
     vault_subparsers = vault_parser.add_subparsers(dest="action")
 
     ## show ##
-    vault_subparsers.add_parser("show", help="Show vault")
+    vault_show_parser = vault_subparsers.add_parser("show", help="Show vault")
+    vault_show_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
 
     ## deposit ##
     vault_deposit_subparser = vault_subparsers.add_parser("deposit", help="Deposit to vault")
@@ -232,12 +282,12 @@ async def cli():
     vault_repay_subparser.add_argument("AMOUNT", type=float, help="Amount of BYC to repay")
 
     ### SAVINGS VAULT ###
-
     savings_parser = subparsers.add_parser("savings", help="Manage a savings vault")
     savings_subparsers = savings_parser.add_subparsers(dest="action")
 
     ## show ##
-    savings_subparsers.add_parser("show", help="Show vault")
+    savings_show_parser = savings_subparsers.add_parser("show", help="Show vault")
+    savings_show_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
 
     ## deposit ##
     savings_deposit_subparser = savings_subparsers.add_parser("deposit", help="Deposit to vault")
@@ -247,7 +297,7 @@ async def cli():
     savings_withdraw_subparser = savings_subparsers.add_parser("withdraw", help="Withdraw from vault")
     savings_withdraw_subparser.add_argument("AMOUNT", type=float, help="Amount of BYC to withdraw")
 
-    # TODO: SF transfer, liq auction, recovering bad debt
+    # TODO: liq auction, recovering bad debt
     # TODO: surplus + recharge auctions
 
     args = parser.parse_args()
@@ -255,8 +305,12 @@ async def cli():
     try:
         kwargs = dict(vars(args))
         #print(kwargs)
+        function_name = f"{args.command}_{args.action}"
+        if "subaction" in kwargs.keys():
+            function_name += f"_{args.subaction}"
         del kwargs["command"]
         del kwargs["action"]
+        kwargs.pop("subaction", None)
         del kwargs["base_url"]
         del kwargs["private_key"]
         del kwargs["add_sig_data"]
@@ -266,13 +320,27 @@ async def cli():
             result = await announcer_fasttrack(rpc_client, **kwargs)
         else:
             # run commands method dynamically based on the parser command
-            print(f"running {args.command}_{args.action} with kwargs {kwargs}")
-            result = await getattr(rpc_client, f"{args.command}_{args.action}")(**kwargs)
+            print(f"running {function_name} with kwargs {kwargs}")
+            result = await getattr(rpc_client, f"{function_name}")(**kwargs)
 
         if isinstance(result, dict) and "bundle" in result.keys() and "status" in result.keys():
             # we assume we are dealing with a spend bundle that was broadcast
             # all we care about is whether broadcast was successful or not
             print(f"Command status: {result['status']}")
+        elif isinstance(result, dict):
+            if "human_readable" in result.keys():
+                del result["human_readable"]
+                result = make_human_readable(result)
+            pprint.pprint(result)
+        elif isinstance(result, list):
+            results = []
+            for r in result:
+                if "human_readable" in r.keys():
+                    del r["human_readable"]
+                    results.append(make_human_readable(r))
+                else:
+                    results.append(r)
+            pprint.pprint(results)
         else:
             pprint.pprint(result)
     except (AttributeError, KeyError) as e:

@@ -78,26 +78,40 @@ class CircuitRPCClient:
         #print("Returning signed bundle")
         return json_resp
 
-    async def wallet_balances(self):
+    async def wallet_balances(self, human_readable=False):
         response = self.client.post(
-            "/balances", json={"synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys]}
+            "/balances",
+            json={
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+            }
+        )
+        data = response.json()
+        if human_readable:
+            data["human_readable"] = True
+        return data
+
+    async def wallet_coins(self, type=""):
+        coin_type = "" if type is None else type
+        response = self.client.post(
+            "/coins",
+            json={
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                "coin_type": coin_type,
+            }
         )
         return response.json()
 
-    async def wallet_coins(self):
-        response = self.client.post(
-            "/coins", json={"synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys]}
-        )
-        return response.json()
-
-    async def vault_show(self):
+    async def vault_show(self, human_readable=False):
         response = self.client.post(
             "/vault",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
             },
         )
-        return response.json()
+        data = response.json()
+        if human_readable:
+            data["human_readable"] = True
+        return data
 
     async def vault_deposit(self, AMOUNT: float):
         response = self.client.post(
@@ -152,14 +166,17 @@ class CircuitRPCClient:
         return sig_response
 
 
-    async def savings_show(self):
+    async def savings_show(self, human_readable=False):
         response = self.client.post(
             "/savings",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
             },
         )
-        return response.json()
+        data = response.json()
+        if human_readable:
+            data["human_readable"] = True
+        return data
 
 
     async def savings_deposit(self, AMOUNT: float):
@@ -190,12 +207,13 @@ class CircuitRPCClient:
         return sig_response
 
 
-    async def announcer_list(self, all=False, incl_spent=False):
+    async def announcer_list(self, all=False, valid_only=False, incl_spent=False):
         if all:
             response = self.client.post(
                 "/announcers/",
                 json={
                     "synthetic_pks": [],
+                    "valid_only": valid_only,
                     "include_spent_coins": incl_spent,
                 },
             )
@@ -204,6 +222,7 @@ class CircuitRPCClient:
                 "/announcers/",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                    "valid_only": valid_only,
                     "include_spent_coins": incl_spent,
                 },
             )
@@ -291,19 +310,35 @@ class CircuitRPCClient:
         sig_response = await self.sign_and_push(bundle)
         return sig_response
 
-    async def upkeep_sync(self):
+    async def upkeep_info(self):
+        response = self.client.get("/protocol/info")
+        return response.json()
+
+    async def upkeep_state(self):
+        response = self.client.get("/protocol/state")
+        return response.json()
+
+    async def upkeep_rpc_sync(self):
         response = self.client.post("/sync_chain_data")
         return response.json()
 
-    async def upkeep_vaults(self):
-        response = self.client.get("/vaults")
+    async def upkeep_rpc_version(self):
+        response = self.client.get("/rpc/version")
         return response.json()
 
-    async def upkeep_transfer_sf(self, vault_id):
+    async def upkeep_vaults_show(self, human_readable=False):
+        response = self.client.get("/vaults")
+        data = response.json()
+        if human_readable:
+            for v in data:
+                v["human_readable"] = True
+        return data
+
+    async def upkeep_vaults_transfer(self, COIN_NAME):
         response = self.client.post(
             "/vaults/transfer_stability_fees",
             json={
-                "vault_name": vault_id,
+                "vault_name": COIN_NAME,
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "fee_per_cost": self.fee_per_cost,
             },
@@ -315,12 +350,12 @@ class CircuitRPCClient:
         bundle = response.json()
         if bundle.get("detail"):
             return bundle
-        print("Got bundle, signing and pushing", bundle)
+        #print("Got bundle, signing and pushing", bundle)
         signed_bundle_json = await self.sign_and_push(SpendBundle.from_json_dict(bundle))
         await self.wait_for_confirmation(SpendBundle.from_json_dict(signed_bundle_json["bundle"]))
         return {"status": "confirmed"}
 
-    async def bills_list(self, all=False, empty_only=False, incl_spent=False):
+    async def bills_list(self, all=False, empty_only=False, human_readable=False, incl_spent=False):
         if all:
             response = self.client.post(
                 "/bills",
@@ -340,7 +375,11 @@ class CircuitRPCClient:
                 },
                 headers={"Content-Type": "application/json"},
             )
-        return response.json()
+        data = response.json()
+        if human_readable:
+            for b in data:
+                b["human_readable"] = True
+        return data
 
     async def bills_toggle(self, COIN_NAME: str):
         response = self.client.post(
@@ -372,24 +411,24 @@ class CircuitRPCClient:
     async def bills_propose(
         self,
         COIN_NAME,
-        value,
-        threshold_amount_to_propose,
-        veto_seconds,
-        delay_seconds,
-        max_delta,
-        statute_index,
+        INDEX,
+        value=None,
+        proposal_threshold=None,
+        veto_seconds=None,
+        delay_seconds=None,
+        max_delta=None,
     ):
         response = self.client.post(
             "/bills/new",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "coin_name": COIN_NAME,
+                "statute_index": INDEX,
                 "value": value,
-                "threshold_amount_to_propose": threshold_amount_to_propose,
+                "threshold_amount_to_propose": proposal_threshold,
                 "veto_seconds": veto_seconds,
                 "delay_seconds": delay_seconds,
                 "max_delta": max_delta,
-                "statute_index": statute_index,
                 "fee_per_cost": self.fee_per_cost,
             },
         )
@@ -402,37 +441,29 @@ class CircuitRPCClient:
         return sig_response
 
     async def oracle_show(self):
-        response = self.client.post(
-            "/oracle/announce/",
-            json={
-                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-            },
+        response = self.client.get(
+            "/oracle"
         )
-        data = response.json()
-        coin = Coin.from_json_dict(data["bundle"]["coin_spends"][0]["coin"])
-        data["name"] = coin.name().hex()
-        del data["bundle"]
-        return data
+        return response.json()
 
-    async def oracle_update(self):
+    async def oracle_update(self, info=False):
         response = self.client.post(
             "/oracle/",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                "info": info,
                 "fee_per_cost": self.fee_per_cost,
             },
         )
         data = response.json()
+        if info:
+            return data
         try:
             bundle = SpendBundle.from_json_dict(data)
             return await self.sign_and_push(bundle)
         except:
             print("Failed to update oracle", data)
             raise ValueError("Failed to update oracle")
-
-    #async def protocol_statutes(self):
-    #    response = self.client.get("/statutes")
-    #    return response.json()
 
     async def statutes_list(self, full=False):
         response = self.client.post(
@@ -446,7 +477,13 @@ class CircuitRPCClient:
         data = response.json()
         return data
 
-    async def statutes_update_price(self, *args):
+    async def statutes_update(self, info=False):
+        if info:
+            response = self.client.post(
+                "/statutes/info/",
+            )
+            return response.json()
+
         response = self.client.post(
             "/statutes/price/",
             json={
