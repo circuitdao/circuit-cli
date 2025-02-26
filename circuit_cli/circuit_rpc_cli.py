@@ -2,12 +2,15 @@ import argparse
 import asyncio
 import os
 import math
+from datetime import datetime
 import pprint
 
 from chia.types.spend_bundle import SpendBundle
 from clvm_rs.casts import int_from_bytes
 
 from circuit_cli.client import CircuitRPCClient
+
+from clvm_tools.binutils import disassemble
 
 MOJOS = 10**12
 MCAT = 10**3
@@ -31,6 +34,10 @@ def make_human_readable(result: dict) -> dict:
                 result[k] = "{:.{prec}f}%".format(v/100, prec=2)
             elif k.lower() in ["price_per_collateral"]:
                 result[k] = "{:.{prec}f} XCH/BYC".format(v/PRICE_PRECISION, prec=math.log10(PRICE_PRECISION))
+            elif k.lower() in ["time_left_until_enactable", "time_left"]:
+                result[k] = f"{v} seconds"
+            elif k.lower() in ["timestamp", "enactable_at"]:
+                result[k] = f"{datetime.fromtimestamp(v).strftime('%Y-%m-%d, %H:%M:%S')}"
     return result
 
 
@@ -61,36 +68,41 @@ async def announcer_fasttrack(rpc_client, price: int, launcher_id: str = None):
     # find min deposit amount
     min_deposit = int(statutes["enacted_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"]) #int_from_bytes(bytes.fromhex(statutes["enacted_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"]))
     max_ttl = int(statutes["enacted_statutes"]["ANNOUNCER_PRICE_TTL"]) #int_from_bytes(bytes.fromhex(statutes["enacted_statutes"]["ANNOUNCER_PRICE_TTL"]))
-    custom_ann_statute = statutes["full_enacted_statutes"]["CUSTOM_ANNOUNCEMENTS"]
-    print(f"configuring announcer with amount={min_deposit + 1000} ttl={max_ttl - 10}")
-    resp = await rpc_client.announcer_configure(coin_name, amount=min_deposit + 1000, ttl=max_ttl - 10)
+    print(f"configuring announcer with deposit={min_deposit} min_deposit={min_deposit} ttl={max_ttl-10}")
+    resp = await rpc_client.announcer_configure(coin_name, deposit=min_deposit, min_deposit=min_deposit, ttl=max_ttl-10)
     bundle = SpendBundle.from_json_dict(resp["bundle"])
     await rpc_client.wait_for_confirmation(bundle)
     print("announcer configured")
-    # propose announcer
+    # approve announcer
     launcher_id, announcer_coin_name = await get_announcer_name(rpc_client, launcher_id)
-    vote_data = await rpc_client.announcer_propose(announcer_coin_name, approve=True, no_bundle=True)
+    vote_data = await rpc_client.announcer_govern(
+        announcer_coin_name,
+        approve=True,
+        create_conditions=True,
+    )
     voting_anns = vote_data["announcements_to_vote_for"]
     bills = await rpc_client.bills_list()
     bill_name = bills[0]["name"]
     resp = await rpc_client.bills_propose(
-        bill_name,
-        voting_anns,
-        custom_ann_statute["threshold_amount_to_propose"],
-        custom_ann_statute["veto_seconds"],
-        custom_ann_statute["delay_seconds"],
-        custom_ann_statute["max_delta"],
-        statute_index=-1,
+        INDEX=-1,
+        VALUE=voting_anns,
+        coin_name=bill_name,
     )
     bundle = SpendBundle.from_json_dict(resp["bundle"])
     await rpc_client.wait_for_confirmation(bundle)
-    print("announcer proposed")
+    print("bill to approve announcer proposed")
     bills = await rpc_client.bills_list()
     bill_name = bills[0]["name"]
     print("Waiting for time to pass to enact bill (farm blocks if in simulator)...")
     await rpc_client.wait_for_confirmation(blocks=1)
+    print("Implementation delay has passsed, enacting bill")
     launcher_id, coin_name = await get_announcer_name(rpc_client, launcher_id)
-    resp = await rpc_client.announcer_propose(coin_name, approve=True, enact=True, bill_name=bill_name)
+    # enacting announcer approval
+    resp = await rpc_client.announcer_govern(
+        coin_name,
+        approve=True,
+        enact_bill_name=bill_name,
+    )
     return resp
 
 
@@ -135,6 +147,13 @@ async def cli():
     # LATER: add -o/--ordered arg to order by outstanding SFs
     upkeep_vaults_transfer_parser = upkeep_vaults_subparsers.add_parser("transfer", help="Transfer stability fees from vault to treasury", description="Transfers stability fees from specified vault to treasury.")
     upkeep_vaults_transfer_parser.add_argument("COIN_NAME", type=str, help="Vault ID")
+    upkeep_vaults_auction_parser = upkeep_vaults_subparsers.add_parser("auction", help="Participate in liquidation auction")
+    upkeep_vaults_auction_parser.add_argument("COIN_NAME", type=str, help="Vault ID")
+    upkeep_vaults_auction_parser.add_argument("-s", "--start", action="store_true", help="Start or restart a liquidation auction")
+    upkeep_vaults_auction_parser.add_argument("-b", "--bid-amount", type=int, help="Submit a bid in a liquidation auction. Specify bid amount in mBYC")
+    upkeep_vaults_recover_parser = upkeep_vaults_subparsers.add_parser("recover", help="Recover bad debt")
+    upkeep_vaults_recover_parser.add_argument("COIN_NAME", type=str, help="Vault ID")
+    upkeep_vaults_recover_parser.add_argument("AMOUNT", type=int, help="Amount (in mBYC) of bad debt to recover")
 
     ### BILLS ###
     bills_parser = subparsers.add_parser("bills", help="Command to manage bills and governance")
@@ -142,27 +161,30 @@ async def cli():
 
     ## propose ##
     bills_propose_parser = bills_subparsers.add_parser("propose", help="Propose a new bill to be enacted")
-    bills_propose_parser.add_argument("COIN_NAME", type=str, help="Coin name for the bill")
-    bills_propose_parser.add_argument("INDEX", type=int, help="Statute index")
-    bills_propose_parser.add_argument("-v", "--value", default=None, type=str, help="Value of bill, eg Statute value. Must be a Program in hex format")
+    bills_propose_parser.add_argument("INDEX", type=int, help="Statute index. Specify -1 for custom conditions")
+    bills_propose_parser.add_argument("VALUE", nargs="?", default=None, type=str, help="Value of bill, ie Statute value or custom announcements. Omit to keep current value. Must be a Program in hex format if INDEX = -1, a 32-byte hex string if INDEX = 0, and an integer otherwise")
+    bills_propose_parser.add_argument("-id", "--coin-name", default=None, type=str, help="Governance coin to use for proposal. If not specified, a suitable coin is chosen automatically")
+    bills_propose_parser.add_argument("-f", "--force", action="store_true", help="Propose bill even if resulting Statutes would not be consistent")
     bills_propose_parser.add_argument("--proposal-threshold", default=None, type=int, help="Min amount of CRT required to propose new Statute value")
     bills_propose_parser.add_argument("--veto-seconds", type=int, default=None, help="Veto period in seconds")
     bills_propose_parser.add_argument("--delay-seconds", type=int, default=None, help="Implementation delay in seconds")
     bills_propose_parser.add_argument("--max-delta", type=int, default=None, help="Max absolute amount in bps by which Statues value may change")
-    bills_propose_parser.add_argument("--proposal-times", type=int, default=None, help="Proposal times")
 
     ## enact ##
-    bills_enact_subparser = bills_subparsers.add_parser("enact", help="Enact a bill into a statue")
-    bills_enact_subparser.add_argument("COIN_NAME", type=str, help="Coin name for the bill")
+    bills_enact_subparser = bills_subparsers.add_parser("enact", help="Enact a bill into statute", description="Enact a bill.")
+    bills_enact_subparser.add_argument("COIN_NAME", nargs="?", default=None, type=str, help="[optional] Coin name of bill to enact")
+    bills_enact_subparser.add_argument("-i", "--info", action="store_true", help="Show info on when next bill can be enacted")
+    bills_enact_subparser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
 
     ## reset ##
     bills_reset_subparser = bills_subparsers.add_parser("reset", help="Reset a bill", description="Sets bill of a governance coin to nil.")
     bills_reset_subparser.add_argument("COIN_NAME", type=str, help="Coin name")
 
     ## list ##
-    bills_list_parser = bills_subparsers.add_parser("list", help="List governance coins", description="By default lists unspent goverenance coins of user.")
+    bills_list_parser = bills_subparsers.add_parser("list", help="List governance coins", description="Lists goverenance coins of user.")
     bills_list_parser.add_argument("-a", "--all", action="store_true", help="List all goverenance coins irrespective of who they belong to")
     bills_list_parser.add_argument("-e", "--empty-only", action="store_true", help="Only list empty governance coins, ie those with bill equal to nil")
+    bills_list_parser.add_argument("-n", "--non-empty-only", action="store_true", help="Only list non-empty governance coins, ie those with bill not equal to nil")
     bills_list_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
     bills_list_parser.add_argument("--incl-spent", action="store_true", help="Include spent governance coins")
 
@@ -204,8 +226,9 @@ async def cli():
 
     ## list ##
     announcer_list_subparser = announcer_subparsers.add_parser("list", help="List announcers", description="By default lists unspent announcers of user, whether approved or not.")
-    announcer_list_subparser.add_argument("-a", "--all", action="store_true", help="List all approved announcers irrespective of who they belong to")
-    announcer_list_subparser.add_argument("-v", "--valid-only", action="store_true", help="Only list announcers whose price has not expired")
+    announcer_list_subparser.add_argument("-a", "--approved", action="store_true", help="List approved announcers only")
+    announcer_list_subparser.add_argument("--all", action="store_true", help="List all approved announcers irrespective of who they belong to")
+    announcer_list_subparser.add_argument("-v", "--valid", action="store_true", help="List valid announcers only (valid = approved, not expired, not banned)")
     announcer_list_subparser.add_argument("--incl-spent", action="store_true", help="Include spent announcer coins")
 
     ## update price ##
@@ -216,23 +239,27 @@ async def cli():
     ## configure ##
     announcer_configure_parser = announcer_subparsers.add_parser("configure", help="Configure the announcer", description="Configures the announcer.")
     announcer_configure_parser.add_argument("-id", "--coin-name", type=str, help="Announcer coin name. Only required if user owns more than one announcer")
-    announcer_configure_parser.add_argument("--amount", type=int, help="New deposit amount")
-    announcer_configure_parser.add_argument("--inner-puzzle-hash", type=int, help="New inner puzzle hash (rekey)")
-    announcer_configure_parser.add_argument("--price", type=int, help="New announcer price. If only updating price, use 'mutate' operation")
-    announcer_configure_parser.add_argument("--ttl", type=int, help="Time to live in seconds")
+    announcer_configure_parser.add_argument("--deposit", type=int, help="New deposit amount")
+    announcer_configure_parser.add_argument("--min-deposit", type=int, help="New minimum deposit amount")
+    announcer_configure_parser.add_argument("--inner-puzzle-hash", type=int, help="New inner puzzle hash (re-key)")
+    announcer_configure_parser.add_argument("--price", type=int, help="New announcer price. If only updating price, it's more effcient to use 'update' operation")
+    announcer_configure_parser.add_argument("--ttl", type=int, help="New time to live in seconds")
 
-    ## propose ##
-    announcer_propose_parser = announcer_subparsers.add_parser(
-        "propose",
-        help="Get vote announcements required to propose this announcer to be approved or disapproved by governance",
+    ## govern ##
+    announcer_govern_parser = announcer_subparsers.add_parser(
+        "govern",
+        help="Govern announcer",
+        description="Create custom conditions required to approve or disapprove announcer.",
     )
-    announcer_propose_parser.add_argument("COIN_NAME", type=str, help="Announcer coin name")
-    announcer_propose_parser.add_argument("--approve", type=bool, required=True, help="Approve or disapprove the announcer")
-    announcer_propose_parser.add_argument(
-        "--no-bundle", type=bool, default=True, help="Get the voting announcements only, no bundle"
+    announcer_govern_parser.add_argument("COIN_NAME", type=str, help="Announcer coin name")
+    announcer_govern_parser.add_argument("-a", "--approve", action="store_true", help="Approve the announcer")
+    announcer_govern_parser.add_argument("-d", "--disapprove", action="store_true", help="Disapprove the announcer")
+    announcer_govern_parser.add_argument(
+        "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill only, no spend bundle"
     )
-    announcer_propose_parser.add_argument("--enact", type=bool, default=False, help="Enact the previously proposed bill")
-    announcer_propose_parser.add_argument("--bill-name", type=str, default=None, help="Bill name to enact")
+    #announcer_govern_parser.add_argument("-e", "--enact-bill", action="store_true", help="Enact the previously proposed bill containing custom conditions to govern announcer")
+    announcer_govern_parser.add_argument("-e", "--enact-bill-name", type=str, default=None, help="Enact the previously proposed bill containing custom conditions to govern announcer")
+    #announcer_govern_parser.add_argument("-b", "--bill-name", type=str, default=None, help="Name of bill to enact. Must be provided when enacting")
 
     ### ORACLE ###
     oracle_parser = subparsers.add_parser("oracle", help="Oracle commands")
@@ -245,13 +272,22 @@ async def cli():
     oracle_update_parser = oracle_subparsers.add_parser("update", help="Update oracle price", description="Adds new price to Oracle price queue.")
     oracle_update_parser.add_argument("-i", "--info", action="store_true", help="Show info on whether Oracle can be updated")
 
+    ## resolve outlier ##
+    oracle_outlier_parser = oracle_subparsers.add_parser("outlier", help="Deal with an oracle price outlier", description="Vote on or resolve an oracle price outlier")
+    oracle_outlier_subparsers = oracle_outlier_parser.add_subparsers(dest="subaction")
+    oracle_outlier_vote_parser = oracle_outlier_subparsers.add_parser("vote", help="Vote on an oracle price outlier")
+    oracle_outlier_vote_parser.add_argument("COIN_NAME", nargs="?", type=str, default=None, help="[optional] CRT coin to use to vote on outlier")
+    oracle_outlier_vote_parser.add_argument("-a", "--accept", action="store_true", help="Accept price outlier")
+    oracle_outlier_vote_parser.add_argument("-r", "--reject", action="store_true", help="Reject price outlier")
+    oracle_outlier_resolve_parser = oracle_outlier_subparsers.add_parser("resolve", help="Resolve outlier according to latest vote")
+
     ### STATUTES ###
     statutes_parser = subparsers.add_parser("statutes", help="Manage statutes")
     statutes_subparsers = statutes_parser.add_subparsers(dest="action")
 
     ## list ##
     statutes_list_subparser = statutes_subparsers.add_parser("list", help="List Statutes")
-    statutes_list_subparser.add_argument("--full", action="store_true", help="Show Statutes incl constraints and additional info")
+    statutes_list_subparser.add_argument("-f", "--full", action="store_true", help="Show Statutes incl constraints and additional info")
 
     ## update price ##
     statutes_update_subparser = statutes_subparsers.add_parser("update", help="Update Statutes Price")
