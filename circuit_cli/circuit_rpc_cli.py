@@ -34,9 +34,9 @@ def make_human_readable(result: dict) -> dict:
                 result[k] = "{:.{prec}f}%".format(v/100, prec=2)
             elif k.lower() in ["price_per_collateral"]:
                 result[k] = "{:.{prec}f} XCH/BYC".format(v/PRICE_PRECISION, prec=math.log10(PRICE_PRECISION))
-            elif k.lower() in ["time_left_until_enactable", "time_left"]:
+            elif k.lower() in ["time_left_until_enactable", "time_left", "expires_in", "time_until_usable"]:
                 result[k] = f"{v} seconds"
-            elif k.lower() in ["timestamp", "enactable_at"]:
+            elif k.lower() in ["timestamp", "enactable_at", "expires_at", "usable_at"]:
                 result[k] = f"{datetime.fromtimestamp(v).strftime('%Y-%m-%d, %H:%M:%S')}"
     return result
 
@@ -87,6 +87,7 @@ async def announcer_fasttrack(rpc_client, price: int, launcher_id: str = None):
         INDEX=-1,
         VALUE=voting_anns,
         coin_name=bill_name,
+        force=True,
     )
     bundle = SpendBundle.from_json_dict(resp["bundle"])
     await rpc_client.wait_for_confirmation(bundle)
@@ -129,7 +130,7 @@ async def cli():
     upkeep_subparsers.add_parser("info", help="Show protocol info", description="Displays BYC and CRT asset IDs.") # LATER: added launcher ID of Statutes (& Oracle?)
 
     ## protocol state ##
-    upkeep_subparsers.add_parser("state", help="Show protocol state", description="Displays current state of protocol coins that are relevenat for keepers or governance. For SF transfers please see upkeep vaults command")
+    upkeep_subparsers.add_parser("state", help="Show protocol state", description="Displays current state of protocol coins that are relevenat for keepers or governance. For SF transfers please see upkeep vaults command.")
     # LATER: show current protocol state. RPC endpoint: /protocol/state
 
     ## RPC server ##
@@ -138,6 +139,34 @@ async def cli():
     upkeep_rpc_subparsers.add_parser("status", help="Status of Circuit RPC server") # LATER: implement. display block height and hash synced to.
     upkeep_rpc_subparsers.add_parser("sync", help="Synchronize Circuit RPC server with Chia blockchain")
     upkeep_rpc_subparsers.add_parser("version", help="Version of Circuit RPC server")
+
+    ## treasury ##
+    upkeep_treasury_parser = upkeep_subparsers.add_parser("treasury", help="Manage treasury", description="Commands to manage protocol treasury.")
+    upkeep_treasury_subparsers = upkeep_treasury_parser.add_subparsers(dest="subaction")
+    upkeep_treasury_rebalance_parser = upkeep_treasury_subparsers.add_parser("rebalance", help="Rebalance treasury", description="Redistributes BYC evenly across all treasury coins.")
+    upkeep_treasury_rebalance_parser.add_argument("-i", "--info", action="store_true", help="Show info on whether treasury can be rebalanced")
+    upkeep_treasury_show_parser = upkeep_treasury_subparsers.add_parser("show", help="Show treasury", description="Shows information on treasury.")
+    upkeep_treasury_show_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
+
+
+    upkeep_treasury_launch_parser = upkeep_treasury_subparsers.add_parser(
+        "launch",
+        help="Launch a treasury coin",
+        description="Creates and launches a new treasury coin into the treasury ring.",
+    )
+    upkeep_treasury_launch_parser.add_argument(
+        "SUCCESSOR_LAUNCHER_ID", nargs="?", type=str, default=None,
+        help="[optional] Launcher ID of the coin that will succeed the newly launched coin in treasury ring",
+    )
+    upkeep_treasury_launch_parser.add_argument(
+        "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill only, no spend bundle",
+    )
+    upkeep_treasury_launch_parser.add_argument(
+        "-e", "--enact-bill-name", type=str, default=None,
+        help="Enact the previously proposed bill containing custom conditions to govern announcer",
+    )
+
+
 
     ## vaults ##
     upkeep_vaults_parser = upkeep_subparsers.add_parser("vaults", help="Manage collateral vaults")
@@ -205,7 +234,7 @@ async def cli():
 
     ## coins ##
     wallet_coins_parser = wallet_subparsers.add_parser("coins", help="Get wallet coins")
-    wallet_coins_parser.add_argument("-t", "--type", type=str, choices=["byc", "crt", "xch"], help="Return coins of given type only")
+    wallet_coins_parser.add_argument("-t", "--type", type=str.lower, choices=["byc", "crt", "xch"], help="Return coins of given type only")
 
     ### ANNOUNCER ###
     announcer_parser = subparsers.add_parser("announcer", help="Announcer commands")
@@ -230,20 +259,26 @@ async def cli():
     announcer_list_subparser.add_argument("--all", action="store_true", help="List all approved announcers irrespective of who they belong to")
     announcer_list_subparser.add_argument("-v", "--valid", action="store_true", help="List valid announcers only (valid = approved, not expired, not banned)")
     announcer_list_subparser.add_argument("--incl-spent", action="store_true", help="Include spent announcer coins")
+    announcer_list_subparser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
 
     ## update price ##
     announcer_update_parser = announcer_subparsers.add_parser("update", help="Update announcer price", description="Updates the announcer price. The puzzle automatically updates the expiry timestamp.")
-    announcer_update_parser.add_argument("-id", "--coin-name", type=str, help="Announcer coin name. Only required if user owns more than one announcer")
     announcer_update_parser.add_argument("PRICE", type=int, help="New announcer price")
+    announcer_update_parser.add_argument("COIN_NAME", nargs="?", type=str, default=None, help="[optional] Announcer coin name. Only required if user owns more than one announcer")
 
     ## configure ##
     announcer_configure_parser = announcer_subparsers.add_parser("configure", help="Configure the announcer", description="Configures the announcer.")
-    announcer_configure_parser.add_argument("-id", "--coin-name", type=str, help="Announcer coin name. Only required if user owns more than one announcer")
+    announcer_configure_parser.add_argument("COIN_NAME", nargs="?", type=str, default=None, help="[optional] Announcer coin name. Only required if user owns more than one announcer")
     announcer_configure_parser.add_argument("--deposit", type=int, help="New deposit amount")
     announcer_configure_parser.add_argument("--min-deposit", type=int, help="New minimum deposit amount")
     announcer_configure_parser.add_argument("--inner-puzzle-hash", type=int, help="New inner puzzle hash (re-key)")
     announcer_configure_parser.add_argument("--price", type=int, help="New announcer price. If only updating price, it's more effcient to use 'update' operation")
     announcer_configure_parser.add_argument("--ttl", type=int, help="New time to live in seconds")
+    announcer_configure_parser.add_argument("-d", "--deactivate", action="store_true", help="Deactivate announcer")
+
+    ## exit ##
+    announcer_exit_parser = announcer_subparsers.add_parser("exit", help="Exit announcer layer", description="Exit announcer layer by melting announcer into plain XCH coin.")
+    announcer_exit_parser.add_argument("COIN_NAME", nargs="?", type=str, default=None, help="[optional] Announcer coin name. Only required if user owns more than one announcer")
 
     ## govern ##
     announcer_govern_parser = announcer_subparsers.add_parser(
@@ -257,9 +292,27 @@ async def cli():
     announcer_govern_parser.add_argument(
         "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill only, no spend bundle"
     )
-    #announcer_govern_parser.add_argument("-e", "--enact-bill", action="store_true", help="Enact the previously proposed bill containing custom conditions to govern announcer")
     announcer_govern_parser.add_argument("-e", "--enact-bill-name", type=str, default=None, help="Enact the previously proposed bill containing custom conditions to govern announcer")
-    #announcer_govern_parser.add_argument("-b", "--bill-name", type=str, default=None, help="Name of bill to enact. Must be provided when enacting")
+
+
+    ### RESOLVER COINS ###
+    resolver_parser = subparsers.add_parser("resolver", help="Command to manage oracle outlier resolver coins", description="Manage oracle outlier resolver coins.")
+    resolver_subparsers = resolver_parser.add_subparsers(dest="action")
+
+    ## list ##
+    resolver_list_parser = resolver_subparsers.add_parser("list", help="List resolver coins", description="Lists resolver coins of user.")
+    resolver_list_parser.add_argument("-a", "--all", action="store_true", help="List all resolver coins irrespective of who they belong to")
+    resolver_list_parser.add_argument("-b", "--usable-only", action="store_true", help="Only list resolver coins who have passed the activation delay")
+    resolver_list_parser.add_argument("-n", "--non-usable-only", action="store_true", help="Only list resolver coins that haven't passed the activation delay")
+    resolver_list_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
+
+    ## toggle resolver mode ##
+    resolver_toggle_parser = resolver_subparsers.add_parser(
+        "toggle", help="Convert a plain CRT coin into a resolver coin or vice versa",
+        description="If coin is in resolver mode, convert to plain CRT. If coin is plain CRT, activate resolver mode."
+    )
+    resolver_toggle_parser.add_argument("COIN_NAME", type=str, help="Coin name")
+
 
     ### ORACLE ###
     oracle_parser = subparsers.add_parser("oracle", help="Oracle commands")
@@ -273,13 +326,26 @@ async def cli():
     oracle_update_parser.add_argument("-i", "--info", action="store_true", help="Show info on whether Oracle can be updated")
 
     ## resolve outlier ##
-    oracle_outlier_parser = oracle_subparsers.add_parser("outlier", help="Deal with an oracle price outlier", description="Vote on or resolve an oracle price outlier")
+    oracle_outlier_parser = oracle_subparsers.add_parser("outlier", help="Resolve an oracle price outlier", description="Vote on or resolve an oracle price outlier.")
     oracle_outlier_subparsers = oracle_outlier_parser.add_subparsers(dest="subaction")
-    oracle_outlier_vote_parser = oracle_outlier_subparsers.add_parser("vote", help="Vote on an oracle price outlier")
-    oracle_outlier_vote_parser.add_argument("COIN_NAME", nargs="?", type=str, default=None, help="[optional] CRT coin to use to vote on outlier")
-    oracle_outlier_vote_parser.add_argument("-a", "--accept", action="store_true", help="Accept price outlier")
-    oracle_outlier_vote_parser.add_argument("-r", "--reject", action="store_true", help="Reject price outlier")
-    oracle_outlier_resolve_parser = oracle_outlier_subparsers.add_parser("resolve", help="Resolve outlier according to latest vote")
+
+    # accept #
+    oracle_outlier_accept_parser = oracle_outlier_subparsers.add_parser("accept", help="Vote to accept an oracle price outlier")
+    oracle_outlier_accept_parser.add_argument("COIN_NAME", nargs="?", type=str, default=None, help="[optional] Resolver coin to use for vote")
+    #oracle_outlier_accept_parser.add_argument("-a", "--accept", action="store_true", help="Accept price outlier")
+    #oracle_outlier_accept_parser.add_argument("-r", "--reject", nargs="*", help="Reject price outlier. Optionally followed by launcher IDs of announcers to be banned")
+    #oracle_outlier_accept_parser = oracle_outlier_subparsers.add_parser("resolve", help="Resolve outlier according to latest vote")
+
+    # reject #
+    oracle_outlier_reject_parser = oracle_outlier_subparsers.add_parser("reject", help="Vote to reject an oracle price outlier")
+    oracle_outlier_reject_parser.add_argument("COIN_NAME", nargs="?", type=str, default=None, help="[optional] Resolver coin to use for vote")
+    oracle_outlier_reject_parser.add_argument("-b", "--ban-list", nargs="+", help="List of announcer launcher IDs to be temporarily banned")
+
+    # resolve #
+    oracle_outlier_resolve_parser = oracle_outlier_subparsers.add_parser(
+        "resolve", help="Resolve an oracle price outlier",
+        description="Resolves a price outlier by applying result of vote to oracle."
+    )
 
     ### STATUTES ###
     statutes_parser = subparsers.add_parser("statutes", help="Manage statutes")
