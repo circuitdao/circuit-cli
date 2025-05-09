@@ -8,7 +8,7 @@ import pprint
 from chia.types.spend_bundle import SpendBundle
 from clvm_rs.casts import int_from_bytes
 
-from circuit_cli.client import CircuitRPCClient, MOJOS
+from circuit_cli.client import CircuitRPCClient #, MOJOS
 
 from clvm_tools.binutils import disassemble
 
@@ -23,12 +23,14 @@ async def get_announcer_name(rpc_client, launcher_id: str = None):
     raise ValueError(f"Announcer with launcher_id {launcher_id.hex()} not found")
 
 
-async def announcer_fasttrack(rpc_client, PRICE: int, launcher_id: str = None):
+async def announcer_fasttrack(rpc_client, PRICE: float, launcher_id: str = None):
     print("Fasttracking announcer")
+    protocol_info = await rpc_client.upkeep_info()
+    MOJOS = protocol_info["mojos_per_xch"]
     if not launcher_id:
         #assert price > 1000
         print("Launching announcer...")
-        resp = await rpc_client.announcer_launch(price=PRICE)
+        resp = await rpc_client.announcer_launch(PRICE=PRICE)
         print("Waiting for time to pass to approve announcer (farm blocks if in simulator)...")
         bundle = SpendBundle.from_json_dict(resp["bundle"])
         print("Approving announcer...")
@@ -39,7 +41,7 @@ async def announcer_fasttrack(rpc_client, PRICE: int, launcher_id: str = None):
     statutes = await rpc_client.statutes_list(full=True)
     # find min deposit amount
     min_deposit = int(statutes["implemented_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"]) #int_from_bytes(bytes.fromhex(statutes["enacted_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"]))
-    max_ttl = int(statutes["implemented_statutes"]["ANNOUNCER_PRICE_TTL"]) #int_from_bytes(bytes.fromhex(statutes["enacted_statutes"]["ANNOUNCER_PRICE_TTL"]))
+    max_ttl = int(statutes["implemented_statutes"]["ANNOUNCER_VALUE_TTL"]) #int_from_bytes(bytes.fromhex(statutes["enacted_statutes"]["ANNOUNCER_PRICE_TTL"]))
     print(f"configuring announcer with deposit={min_deposit/MOJOS} XCH, min_deposit={min_deposit/MOJOS} XCH, ttl={max_ttl-10} seconds")
     resp = await rpc_client.announcer_configure(coin_name, deposit=min_deposit/MOJOS, min_deposit=min_deposit/MOJOS, price=PRICE, ttl=max_ttl-10)
     bundle = SpendBundle.from_json_dict(resp["bundle"])
@@ -140,8 +142,8 @@ async def cli():
         "-c", "--create-conditions", action="store_true", help="Create custom conditions to propose bill (no spend bundle)"
     )
     upkeep_announcers_approve_parser.add_argument(
-        "-i", "--implement-bill-name", type=str, default=None,
-        help="Implement the previously proposed bill containing custom conditions to approve announcer"
+        "-b", "--bill-coin-name", type=str, default=None,
+        help="Spend governance coin containing the previously proposed bill to approve the announcer"
     )
     upkeep_announcers_disapprove_parser = upkeep_announcers_subparsers.add_parser(
         "disapprove", help="Disapprove an announcer", description="Disapproves an announcer so that it can no longer be used for oracle price updates.",
@@ -151,8 +153,8 @@ async def cli():
         "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill only, no spend bundle"
     )
     upkeep_announcers_disapprove_parser.add_argument(
-        "-i", "--implement-bill-name", type=str, default=None,
-        help="Implement the previously proposed bill containing custom conditions to disapprove announcer"
+        "-b", "--bill-coin-name", type=str, default=None,
+        help="Spend governance coin containing the previously proposed bill to disapprove the announcer"
     )
     upkeep_announcers_penalize_parser = upkeep_announcers_subparsers.add_parser(
         "penalize", help="Penalize an announcer", description="Penalizes an announcer.",
@@ -297,10 +299,10 @@ async def cli():
     bills_propose_parser.add_argument("INDEX", type=int, help="Statute index. Specify -1 for custom conditions")
     bills_propose_parser.add_argument("VALUE", nargs="?", default=None, type=str, help="Value of bill, ie Statute value or custom announcements. Omit to keep current value. Must be a Program in hex format if INDEX = -1, a 32-byte hex string if INDEX = 0, and an integer otherwise")
     bills_propose_parser.add_argument("-id", "--coin-name", default=None, type=str, help="Governance coin to use for proposal. If not specified, a suitable coin is chosen automatically")
-    bills_propose_parser.add_argument("-f", "--force", action="store_true", help="Propose bill even if resulting Statutes would not be consistent")
+    bills_propose_parser.add_argument("-f", "--force", action="store_true", help="Propose bill even if resulting Statutes are not consistent")
     bills_propose_parser.add_argument("--proposal-threshold", default=None, type=int, help="Min amount of CRT required to propose new Statute value")
-    bills_propose_parser.add_argument("--veto-seconds", type=int, default=None, help="Veto period in seconds")
-    bills_propose_parser.add_argument("--delay-seconds", type=int, default=None, help="Implementation delay in seconds")
+    bills_propose_parser.add_argument("-v", "--veto-interval", type=int, default=None, help="Veto period in seconds")
+    bills_propose_parser.add_argument("-d", "--implementation-delay", type=int, default=None, help="Implementation delay in seconds")
     bills_propose_parser.add_argument("--max-delta", type=int, default=None, help="Max absolute amount in bps by which Statues value may change")
 
     ## implement ##
@@ -332,13 +334,13 @@ async def cli():
 
     ## launch ##
     announcer_launch_parser = announcer_subparsers.add_parser("launch", help="Launch an announcer")
-    announcer_launch_parser.add_argument("-p", "--price", type=int, help="Initial price")
+    announcer_launch_parser.add_argument("PRICE", type=float, help="Initial announcer price in USD per XCH")
 
     ## fasttrack (launch + approve) ##
     announcer_fasttrack_parser = announcer_subparsers.add_parser(
         "fasttrack", help="Launch and approve an announcer", description="Launches and approves or approves an announcer. Requires a governance coin with empty bill to be available."
     )
-    announcer_fasttrack_parser.add_argument("PRICE", type=int, help="New announcer price")
+    announcer_fasttrack_parser.add_argument("PRICE", type=float, help="New announcer price in USD per XCH")
     announcer_fasttrack_parser.add_argument(
         "--launcher-id", type=str, help="Announcer launcher ID. Specify when announcer has already been launched but not approved yet"
     )
@@ -353,7 +355,7 @@ async def cli():
 
     ## update price ##
     announcer_update_parser = announcer_subparsers.add_parser("update", help="Update announcer price", description="Updates the announcer price. The puzzle automatically updates the expiry timestamp.")
-    announcer_update_parser.add_argument("PRICE", type=int, help="New announcer price")
+    announcer_update_parser.add_argument("PRICE", type=float, help="New announcer price in USD per XCH")
     announcer_update_parser.add_argument("COIN_NAME", nargs="?", type=str, default=None, help="[optional] Announcer coin name. Only required if user owns more than one announcer")
 
     ## configure ##
@@ -362,8 +364,8 @@ async def cli():
     announcer_configure_parser.add_argument("--deposit", type=float, help="New deposit amount in XCH")
     announcer_configure_parser.add_argument("--min-deposit", type=float, help="New minimum deposit amount in XCH")
     announcer_configure_parser.add_argument("--inner-puzzle-hash", type=int, help="New inner puzzle hash (re-key)")
-    announcer_configure_parser.add_argument("--price", type=int, help="New announcer price. If only updating price, it's more effcient to use 'update' operation")
-    announcer_configure_parser.add_argument("--ttl", type=int, help="New time to live in seconds")
+    announcer_configure_parser.add_argument("--price", type=float, help="New announcer price in USD per XCH. If only updating price, it's more effcient to use 'update' operation")
+    announcer_configure_parser.add_argument("--ttl", type=int, help="New price time to live in seconds")
     announcer_configure_parser.add_argument("-d", "--deactivate", action="store_true", help="Deactivate announcer")
 
     ## register ##
@@ -464,6 +466,13 @@ async def cli():
             # we assume we are dealing with a spend bundle that was broadcast
             # all we care about is whether broadcast was successful or not
             print(f"Command status: {result['status']}")
+        #if (
+        #        isinstance(result, dict) and not "bundle" in result.keys()
+        #        and "status" in result.keys() and "error" in result.keys()
+        #):
+        #    # not trying to broadcast a bundle and there was an error
+        #    print(f"Error: {result['error']}")
+        #    print(f"Command status: {result['status']}")
         else:
             pprint.pprint(result)
     except (AttributeError, KeyError) as e:
