@@ -2,13 +2,14 @@ import argparse
 import asyncio
 import os
 import math
+import httpx
 from datetime import datetime
 import pprint
 
 from chia.types.spend_bundle import SpendBundle
 from clvm_rs.casts import int_from_bytes
 
-from circuit_cli.client import CircuitRPCClient #, MOJOS
+from circuit_cli.client import CircuitRPCClient
 
 from clvm_tools.binutils import disassemble
 
@@ -25,8 +26,7 @@ async def get_announcer_name(rpc_client, launcher_id: str = None):
 
 async def announcer_fasttrack(rpc_client, PRICE: float, launcher_id: str = None):
     print("Fasttracking announcer")
-    protocol_info = await rpc_client.upkeep_info()
-    MOJOS = protocol_info["mojos_per_xch"]
+    MOJOS = rpc_client.consts["MOJOS"]
     if not launcher_id:
         #assert price > 1000
         print("Launching announcer...")
@@ -40,8 +40,8 @@ async def announcer_fasttrack(rpc_client, PRICE: float, launcher_id: str = None)
     print(f"announcer {launcher_id=} {coin_name=}")
     statutes = await rpc_client.statutes_list(full=True)
     # find min deposit amount
-    min_deposit = int(statutes["implemented_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"]) #int_from_bytes(bytes.fromhex(statutes["enacted_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"]))
-    max_ttl = int(statutes["implemented_statutes"]["ANNOUNCER_VALUE_TTL"]) #int_from_bytes(bytes.fromhex(statutes["enacted_statutes"]["ANNOUNCER_PRICE_TTL"]))
+    min_deposit = int(statutes["implemented_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"])
+    max_ttl = int(statutes["implemented_statutes"]["ANNOUNCER_VALUE_TTL"])
     print(f"configuring announcer with deposit={min_deposit/MOJOS} XCH, min_deposit={min_deposit/MOJOS} XCH, ttl={max_ttl-10} seconds")
     resp = await rpc_client.announcer_configure(coin_name, deposit=min_deposit/MOJOS, min_deposit=min_deposit/MOJOS, price=PRICE, ttl=max_ttl-10)
     bundle = SpendBundle.from_json_dict(resp["bundle"])
@@ -51,7 +51,6 @@ async def announcer_fasttrack(rpc_client, PRICE: float, launcher_id: str = None)
     launcher_id, announcer_coin_name = await get_announcer_name(rpc_client, launcher_id)
     vote_data = await rpc_client.upkeep_announcers_approve(
         announcer_coin_name,
-        #approve=True,
         create_conditions=True,
     )
     voting_anns = vote_data["announcements_to_vote_for"]
@@ -67,7 +66,7 @@ async def announcer_fasttrack(rpc_client, PRICE: float, launcher_id: str = None)
     await rpc_client.wait_for_confirmation(bundle)
     print("bill to approve announcer proposed")
     bills = await rpc_client.bills_list()
-    bill_name = bills[0]["name"]
+    bill_coin_name = bills[0]["name"]
     print("Waiting for time to pass to implement bill (farm blocks if in simulator)...")
     await rpc_client.wait_for_confirmation(blocks=1)
     print("Implementation delay has passsed, implementing bill")
@@ -75,8 +74,7 @@ async def announcer_fasttrack(rpc_client, PRICE: float, launcher_id: str = None)
     # implementing announcer approval
     resp = await rpc_client.upkeep_announcers_approve(
         coin_name,
-        #approve=True,
-        implement_bill_name=bill_name,
+        bill_coin_name=bill_coin_name,
     )
     return resp
 
@@ -139,22 +137,22 @@ async def cli():
     )
     upkeep_announcers_approve_parser.add_argument("COIN_NAME", type=str, help="Name of announcer")
     upkeep_announcers_approve_parser.add_argument(
-        "-c", "--create-conditions", action="store_true", help="Create custom conditions to propose bill (no spend bundle)"
+        "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill to approve the announcer"
     )
     upkeep_announcers_approve_parser.add_argument(
         "-b", "--bill-coin-name", type=str, default=None,
-        help="Spend governance coin containing the previously proposed bill to approve the announcer"
+        help="Implement previously proposed bill to approve the announcer"
     )
     upkeep_announcers_disapprove_parser = upkeep_announcers_subparsers.add_parser(
         "disapprove", help="Disapprove an announcer", description="Disapproves an announcer so that it can no longer be used for oracle price updates.",
     )
     upkeep_announcers_disapprove_parser.add_argument("COIN_NAME", type=str, help="Name of announcer")
     upkeep_announcers_disapprove_parser.add_argument(
-        "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill only, no spend bundle"
+        "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill to disapprove the announcer"
     )
     upkeep_announcers_disapprove_parser.add_argument(
         "-b", "--bill-coin-name", type=str, default=None,
-        help="Spend governance coin containing the previously proposed bill to disapprove the announcer"
+        help="Implement previously proposed bill to disapprove the announcer"
     )
     upkeep_announcers_penalize_parser = upkeep_announcers_subparsers.add_parser(
         "penalize", help="Penalize an announcer", description="Penalizes an announcer.",
@@ -192,18 +190,26 @@ async def cli():
     upkeep_recharge_list_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
     upkeep_recharge_launch_parser = upkeep_recharge_subparsers.add_parser("launch", help="Launch a recharge auction coin", description="Creates and launches a new recharge auction coin.")
     upkeep_recharge_launch_parser.add_argument(
-        "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill only, no spend bundle",
+        "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill to launch recharge auction",
     )
     upkeep_recharge_launch_parser.add_argument(
-        "-i", "--implement-bill-name", type=str, default=None,
-        help="Implement the previously proposed bill containing custom conditions to launch recharge auction coin",
+        "-b", "--bill-coin-name", type=str, default=None,
+        help="Implement previously proposed bill to launch recharge auction coin",
     )
     upkeep_recharge_start_parser = upkeep_recharge_subparsers.add_parser("start", help="Start a recharge auction", description="Starts a recharge auction.")
     upkeep_recharge_start_parser.add_argument("COIN_NAME", type=str, help="Name of recharge auction coin") # TODO: make optional arg
     upkeep_recharge_bid_parser = upkeep_recharge_subparsers.add_parser("bid", help="Bid in a recharge auction", description="Submits a bid in a recharge auction.")
     upkeep_recharge_bid_parser.add_argument("COIN_NAME", type=str, help="Name of recharge auction coin")
-    upkeep_recharge_bid_parser.add_argument("CRT_AMOUNT", type=float, help="Amount of CRT to request")
+    upkeep_recharge_bid_parser.add_argument("CRT_AMOUNT", nargs="?", type=float, default=None, help="Amount of CRT to request. Do not specify when -i option is set.")
     upkeep_recharge_bid_parser.add_argument("BYC_AMOUNT", nargs="?", type=float, default=None, help="[optional] Amount of BYC to bid. Default is minimum possible.")
+    upkeep_recharge_bid_parser.add_argument(
+        "-t", "--target-puzzle-hash", type=str, default=None,
+        help="Puzzle hash to which CRT is issued if bid wins auction. Default is puzhash corresp to first derived synthetic key."
+    )
+    upkeep_recharge_bid_parser.add_argument(
+        "-i", "--info", nargs="?", type=float, default=None, metavar="INTENDED_BYC_AMOUNT",
+        help="Show info on a potential bid. If no intended BYC bid amount is specified, the minimum admissible amount is assumed."
+    )
     upkeep_recharge_settle_parser = upkeep_recharge_subparsers.add_parser("settle", help="Settle a recharge auction", description="Settles a recharge auction.")
     upkeep_recharge_settle_parser.add_argument("COIN_NAME", type=str, help="Name of recharge auction coin")
 
@@ -237,11 +243,11 @@ async def cli():
         help="[optional] Launcher ID of the coin that will succeed the newly launched coin in treasury ring",
     )
     upkeep_treasury_launch_parser.add_argument(
-        "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill only, no spend bundle",
+        "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill to launch treasury coin",
     )
     upkeep_treasury_launch_parser.add_argument(
-        "-i", "--implement-bill-name", type=str, default=None,
-        help="Implement the previously proposed bill containing custom conditions to launch treasury coin",
+        "-b", "--bill-coin-name", type=str, default=None,
+        help="Implement previously proposed bill to launch treasury coin",
     )
 
     ## vaults ##
@@ -478,6 +484,8 @@ async def cli():
     except (AttributeError, KeyError) as e:
         print(e)
         parser.print_help()
+    except httpx.HTTPStatusError as err:
+        print(err.args[0])
     finally:
         rpc_client.close()
 
