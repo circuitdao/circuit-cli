@@ -288,7 +288,7 @@ class CircuitRPCClient:
 
     async def announcer_launch(self, PRICE, units=False):
         response = self.client.post(
-            "/announcers/launch",
+            "/announcers/launch/",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "operation": "launch",
@@ -455,7 +455,7 @@ class CircuitRPCClient:
         return sig_response
 
 
-    async def announcer_update(self, PRICE, COIN_NAME: str = None, units=False):
+    async def announcer_update(self, PRICE, COIN_NAME: str = None, fee_coin=False, units=False):
         if not COIN_NAME:
             response = self.client.post(
                 "/announcer",
@@ -477,6 +477,7 @@ class CircuitRPCClient:
                 "operation": "mutate",
                 "args": {
                     "new_price": PRICE if units else int(PRICE * self.consts["PRICE_PRECISION"]),
+                    "attach_fee_coin": fee_coin,
                 },
                 "fee_per_cost": self.fee_per_cost,
             },

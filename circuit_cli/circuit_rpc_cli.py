@@ -410,6 +410,7 @@ async def cli():
     announcer_update_parser = announcer_subparsers.add_parser("update", help="Update announcer price", description="Updates the announcer price. The puzzle automatically updates the expiry timestamp.")
     announcer_update_parser.add_argument("PRICE", type=float, help="New announcer price in USD per XCH")
     announcer_update_parser.add_argument("COIN_NAME", nargs="?", type=str, default=None, help="[optional] Announcer coin name. Only required if user owns more than one announcer")
+    announcer_update_parser.add_argument("--fee-coin", action="store_true", help="Use a fee coin instead of announcer deposit to pay for transaction fees")
 
     ## configure ##
     announcer_configure_parser = announcer_subparsers.add_parser("configure", help="Configure the announcer", description="Configures the announcer.")
