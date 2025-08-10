@@ -24,30 +24,39 @@ async def get_announcer_name(rpc_client, launcher_id: str = None):
     raise ValueError(f"Announcer with launcher_id {launcher_id.hex()} not found")
 
 
-async def announcer_fasttrack(rpc_client, PRICE: float, launcher_id: str = None):
+async def announcer_fasttrack(rpc_client, PRICE: float = None, launcher_id: str = None):
     print("Fasttracking announcer")
     MOJOS = rpc_client.consts["MOJOS"]
     if not launcher_id:
-        #assert price > 1000
         print("Launching announcer...")
         resp = await rpc_client.announcer_launch(PRICE=PRICE)
-        print("Waiting for time to pass to approve announcer (farm blocks if in simulator)...")
+        print("Waiting for time to pass to launch announcer (farm blocks if in simulator)...")
         bundle = SpendBundle.from_json_dict(resp["bundle"])
-        print("Approving announcer...")
         await rpc_client.wait_for_confirmation(bundle)
-        print("Announcer approved.")
+        print("Announcer launched.")
     launcher_id, coin_name = await get_announcer_name(rpc_client, launcher_id)
-    print(f"announcer {launcher_id=} {coin_name=}")
+    print(f"  Launcher ID: {launcher_id}")
+    print(f"  Coin name:   {coin_name}")
     statutes = await rpc_client.statutes_list(full=True)
     # find min deposit amount
     min_deposit = int(statutes["implemented_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"])
-    max_ttl = int(statutes["implemented_statutes"]["ANNOUNCER_VALUE_TTL"])
-    print(f"configuring announcer with deposit={min_deposit/MOJOS} XCH, min_deposit={min_deposit/MOJOS} XCH, ttl={max_ttl-10} seconds")
-    resp = await rpc_client.announcer_configure(coin_name, deposit=min_deposit/MOJOS, min_deposit=min_deposit/MOJOS, price=PRICE, ttl=max_ttl-10)
+    max_ttl = int(statutes["implemented_statutes"]["ANNOUNCER_MAXIMUM_VALUE_TTL"])
+    print(f"Configuring announcer with:")
+    print(f"  deposit={min_deposit/MOJOS} XCH")
+    print(f"  min_deposit={min_deposit/MOJOS} XCH")
+    print(f"  ttl={max_ttl-10} seconds")
+    resp = await rpc_client.announcer_configure(
+        coin_name,
+        deposit=min_deposit/MOJOS,
+        min_deposit=min_deposit/MOJOS,
+        price=PRICE,
+        ttl=max_ttl-10
+    )
     bundle = SpendBundle.from_json_dict(resp["bundle"])
     await rpc_client.wait_for_confirmation(bundle)
-    print("announcer configured")
+    print("Announcer configured.")
     # approve announcer
+    print("Approving announcer...")
     launcher_id, announcer_coin_name = await get_announcer_name(rpc_client, launcher_id)
     vote_data = await rpc_client.upkeep_announcers_approve(
         announcer_coin_name,
@@ -64,18 +73,19 @@ async def announcer_fasttrack(rpc_client, PRICE: float, launcher_id: str = None)
     )
     bundle = SpendBundle.from_json_dict(resp["bundle"])
     await rpc_client.wait_for_confirmation(bundle)
-    print("bill to approve announcer proposed")
+    print("Bill to approve announcer proposed.")
     bills = await rpc_client.bills_list()
     bill_coin_name = bills[0]["name"]
     print("Waiting for time to pass to implement bill (farm blocks if in simulator)...")
     await rpc_client.wait_for_confirmation(blocks=1)
-    print("Implementation delay has passsed, implementing bill")
+    print("Implementation delay has passsed. Implementing bill...")
     launcher_id, coin_name = await get_announcer_name(rpc_client, launcher_id)
     # implementing announcer approval
     resp = await rpc_client.upkeep_announcers_approve(
         coin_name,
         bill_coin_name=bill_coin_name,
     )
+    print("Bill implemented. Announcer approved.")
     return resp
 
 
@@ -99,12 +109,12 @@ async def cli():
     upkeep_subparsers = upkeep_parser.add_subparsers(dest="action")
 
     ## protocol info ##
-    upkeep_subparsers.add_parser("info", help="Show protocol info", description="Displays BYC and CRT asset IDs.") # LATER: added launcher ID of Statutes (& Oracle?)
+    upkeep_subparsers.add_parser("invariants", help="Show protocol invariants", description="Shows BYC and CRT asset IDs and various other invariants.") # LATER: added launcher ID of Statutes (& Oracle?)
 
     ## protocol state ##
     upkeep_state_parser = upkeep_subparsers.add_parser(
-        "state", help="Show protocol state",
-        description="Displays current state of protocol coins that are relevenat for keepers, governance and announcers. By default, the whole protocol state is shown."
+        "state", help="Show information on pending operations and protocol state",
+        description="Displays current state of protocol coins that are relevenat for keepers, governance and announcers. By default, all information is shown."
     )
     upkeep_state_parser.add_argument("-v", "--vaults", action="store_true", help="Show collateral vaults")
     upkeep_state_parser.add_argument("-r", "--recharge-auctions", action="store_true", help="Show recharge auctions")
@@ -115,7 +125,7 @@ async def cli():
     ## RPC server ##
     upkeep_rpc_parser = upkeep_subparsers.add_parser("rpc", help="Info on Circuit RPC server")
     upkeep_rpc_subparsers = upkeep_rpc_parser.add_subparsers(dest="subaction")
-    upkeep_rpc_subparsers.add_parser("status", help="Status of Circuit RPC server") # LATER: implement. display block height and hash synced to.
+    upkeep_rpc_subparsers.add_parser("status", help="Status of Circuit RPC server", description="Shows synchronization status of backend database with blockchain")
     upkeep_rpc_subparsers.add_parser("sync", help="Synchronize Circuit RPC server with Chia blockchain")
     upkeep_rpc_subparsers.add_parser("version", help="Version of Circuit RPC server")
 
@@ -126,9 +136,10 @@ async def cli():
         "list", help="List announcers",
         description="Lists approved announcers. If COIN_NAME is specified, info for only this one announcer will be shown, whether approved or not"
     )
-    upkeep_announcers_list_parser.add_argument("COIN_NAME", nargs="?", type=str, default=None, help="[optional] Name of announcer")
+    upkeep_announcers_list_parser.add_argument("COIN_NAME", nargs="?", type=str, default=None, help="[optional] Name of announcer coin. If specified, info for only this announcer is shown")
     upkeep_announcers_list_parser.add_argument("-p", "--penalizable", action="store_true", help="List penalizable announcers")
     upkeep_announcers_list_parser.add_argument("-v", "--valid", action="store_true", help="List valid announcers (approved and not expired)")
+    upkeep_announcers_list_parser.add_argument("--incl-spent", action="store_true", help="Include spent announcer coins")
     upkeep_announcers_list_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
     upkeep_announcers_approve_parser = upkeep_announcers_subparsers.add_parser(
         "approve",
@@ -179,15 +190,25 @@ async def cli():
     ## registry ##
     upkeep_registry_parser = upkeep_subparsers.add_parser("registry", help="Announcer Registry commands")
     upkeep_registry_subparsers = upkeep_registry_parser.add_subparsers(dest="subaction")
-    upkeep_registry_subparsers.add_parser("show", help="Show Announcer Registry", description="Shows Announcer Registry.")
+    # show
+    upkeep_registry_show_parser = upkeep_registry_subparsers.add_parser("show", help="Show Announcer Registry", description="Shows Announcer Registry.")
+    upkeep_registry_show_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
+    # distribute rewards
     upkeep_registry_reward_parser = upkeep_registry_subparsers.add_parser("reward", help="Distribute CRT Rewards", description="Distributes CRT Rewards to registered Announcers.")
+    upkeep_registry_reward_parser.add_argument(
+        "-t", "--target-puzzle-hash", metavar="PUZZLE_HASH", type=str, default=None,
+        help="Puzzle hash to which excess CRT Rewards not allocated to any announcer will be be paid. Default is first synthetic derived key of user's wallet"
+    )
     upkeep_registry_reward_parser.add_argument("-i", "--info", action="store_true", help="Show info on whether rewards can be distributed")
+    upkeep_registry_reward_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
 
     ## recharge auctions ##
     upkeep_recharge_parser = upkeep_subparsers.add_parser("recharge", help="Participate in recharge auctions", description="Commands to participate in recharge auctions.")
     upkeep_recharge_subparsers = upkeep_recharge_parser.add_subparsers(dest="subaction")
+    # list
     upkeep_recharge_list_parser = upkeep_recharge_subparsers.add_parser("list", help="List recharge auctions", description="Lists recharge auctions.")
     upkeep_recharge_list_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
+    # launch
     upkeep_recharge_launch_parser = upkeep_recharge_subparsers.add_parser("launch", help="Launch a recharge auction coin", description="Creates and launches a new recharge auction coin.")
     upkeep_recharge_launch_parser.add_argument(
         "-c", "--create-conditions", action="store_true", help="Create custom conditions for bill to launch recharge auction",
@@ -196,43 +217,59 @@ async def cli():
         "-b", "--bill-coin-name", type=str, default=None,
         help="Implement previously proposed bill to launch recharge auction coin",
     )
+    # start
     upkeep_recharge_start_parser = upkeep_recharge_subparsers.add_parser("start", help="Start a recharge auction", description="Starts a recharge auction.")
-    upkeep_recharge_start_parser.add_argument("COIN_NAME", type=str, help="Name of recharge auction coin") # TODO: make optional arg
+    upkeep_recharge_start_parser.add_argument("COIN_NAME", type=str, help="Name of recharge auction coin")
+    # bid
     upkeep_recharge_bid_parser = upkeep_recharge_subparsers.add_parser("bid", help="Bid in a recharge auction", description="Submits a bid in a recharge auction.")
     upkeep_recharge_bid_parser.add_argument("COIN_NAME", type=str, help="Name of recharge auction coin")
-    upkeep_recharge_bid_parser.add_argument("CRT_AMOUNT", nargs="?", type=float, default=None, help="Amount of CRT to request. Do not specify when -i option is set.")
-    upkeep_recharge_bid_parser.add_argument("BYC_AMOUNT", nargs="?", type=float, default=None, help="[optional] Amount of BYC to bid. Default is minimum possible.")
+    upkeep_recharge_bid_parser.add_argument("BYC_AMOUNT", nargs="?", type=float, default=None, help="[optional] Amount of BYC to bid. Default is minimum amount.")
+    upkeep_recharge_bid_parser.add_argument("-crt", metavar="AMOUNT", nargs="?", type=float, default=None, help="Amount of CRT to request. Default is max amount.")
     upkeep_recharge_bid_parser.add_argument(
-        "-t", "--target-puzzle-hash", type=str, default=None,
-        help="Puzzle hash to which CRT is issued if bid wins auction. Default is puzhash corresp to first derived synthetic key."
+        "-t", "--target-puzzle-hash", metavar="PUZZLE_HASH", type=str, default=None,
+        help="Puzzle hash to which CRT is issued if bid wins auction. Default is puzzle hash of funding coin selected by driver."
     )
     upkeep_recharge_bid_parser.add_argument(
-        "-i", "--info", nargs="?", type=float, default=None, metavar="INTENDED_BYC_AMOUNT",
+        "-i", "--info", action="store_true",
         help="Show info on a potential bid. If no intended BYC bid amount is specified, the minimum admissible amount is assumed."
     )
+    upkeep_recharge_bid_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
+    # settle
     upkeep_recharge_settle_parser = upkeep_recharge_subparsers.add_parser("settle", help="Settle a recharge auction", description="Settles a recharge auction.")
     upkeep_recharge_settle_parser.add_argument("COIN_NAME", type=str, help="Name of recharge auction coin")
 
     ## surplus auctions ##
     upkeep_surplus_parser = upkeep_subparsers.add_parser("surplus", help="Participate in surplus auctions", description="Commands to participate in surplus auctions.")
     upkeep_surplus_subparsers = upkeep_surplus_parser.add_subparsers(dest="subaction")
-    # TODO: provide info on when bid expires
+    # list
     upkeep_surplus_list_parser = upkeep_surplus_subparsers.add_parser("list", help="List surplus auctions", description="Lists surplus auctions.")
     upkeep_surplus_list_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
+    # start
     upkeep_surplus_start_parser = upkeep_surplus_subparsers.add_parser("start", help="Start a surplus auction", description="Starts a surplus auction.")
+    # bid
     upkeep_surplus_bid_parser = upkeep_surplus_subparsers.add_parser("bid", help="Bid in a surplus auction", description="Submits a bid in a surplus auction.")
     upkeep_surplus_bid_parser.add_argument("COIN_NAME", type=str, help="Name of surplus auction coin")
-    upkeep_surplus_bid_parser.add_argument("AMOUNT", type=float, help="Amount of CRT to bid")
+    upkeep_surplus_bid_parser.add_argument("AMOUNT", nargs="?", type=float, default=None, help="Amount of CRT to bid. Optional when -i option is set.")
+    upkeep_surplus_bid_parser.add_argument(
+        "-t", "--target-puzzle-hash", metavar="PUZZLE_HASH", type=str, default=None,
+        help="Puzzle hash to which BYC is sent if bid wins auction. Default is puzzle hash of funding coin selected by driver."
+    )
+    upkeep_surplus_bid_parser.add_argument("-i", "--info", action="store_true", help="Show info on a potential bid")
+    upkeep_surplus_bid_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
+    # settle
     upkeep_surplus_settle_parser = upkeep_surplus_subparsers.add_parser("settle", help="Settle a surplus auction", description="Settles a surplus auction.")
     upkeep_surplus_settle_parser.add_argument("COIN_NAME", type=str, help="Name of surplus auction coin")
 
     ## treasury ##
     upkeep_treasury_parser = upkeep_subparsers.add_parser("treasury", help="Manage treasury", description="Commands to manage protocol treasury.")
     upkeep_treasury_subparsers = upkeep_treasury_parser.add_subparsers(dest="subaction")
-    upkeep_treasury_rebalance_parser = upkeep_treasury_subparsers.add_parser("rebalance", help="Rebalance treasury", description="Redistributes BYC evenly across all treasury coins.")
-    upkeep_treasury_rebalance_parser.add_argument("-i", "--info", action="store_true", help="Show info on whether treasury can be rebalanced")
+    # show
     upkeep_treasury_show_parser = upkeep_treasury_subparsers.add_parser("show", help="Show treasury", description="Shows information on treasury.")
     upkeep_treasury_show_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
+    # rebalance
+    upkeep_treasury_rebalance_parser = upkeep_treasury_subparsers.add_parser("rebalance", help="Rebalance treasury", description="Redistributes BYC evenly across all treasury coins.")
+    upkeep_treasury_rebalance_parser.add_argument("-i", "--info", action="store_true", help="Show info on whether treasury can be rebalanced")
+    # launch
     upkeep_treasury_launch_parser = upkeep_treasury_subparsers.add_parser(
         "launch",
         help="Launch a treasury coin",
@@ -326,13 +363,22 @@ async def cli():
     wallet_subparsers = wallet_parser.add_subparsers(dest="action")
 
     ## balances ##
-    wallet_balances_parser = wallet_subparsers.add_parser("balances", help="Get wallet balances")
+    wallet_balances_parser = wallet_subparsers.add_parser("balances", help="Get wallet balances", description="Show wallet balances for XCH, BYC, and CRT coins not in governance mode.")
     wallet_balances_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
 
     ## coins ##
-    wallet_coins_parser = wallet_subparsers.add_parser("coins", help="Get wallet coins")
-    wallet_coins_parser.add_argument("-t", "--type", type=str.lower, choices=["byc", "crt", "xch"], help="Return coins of given type only")
+    wallet_coins_parser = wallet_subparsers.add_parser("coins", help="Get wallet coins", description="Show information on individual coins in wallet. By default, only CRT coins not in governance mode are returned.")
+    wallet_coins_parser.add_argument("-t", "--type", type=str.lower, choices=["xch", "byc", "crt", "all", "gov", "empty", "bill"], help="Return coins of given type only")
     wallet_coins_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
+
+    ## toggle governance mode ##
+    wallet_toggle_parser = wallet_subparsers.add_parser(
+        "toggle", help="Convert a plain CRT coin into a governance coin or vice versa",
+        description="If coin is in governance mode, exit to plain CRT. If coin is plain CRT, activate governance mode."
+    )
+    wallet_toggle_parser.add_argument("COIN_NAME", type=str, help="Coin name")
+    wallet_toggle_parser.add_argument("-i", "--info", action="store_true", help="Show info on toggling governance mode")
+    wallet_toggle_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
 
     ### ANNOUNCER ###
     announcer_parser = subparsers.add_parser("announcer", help="Announcer commands")
@@ -343,10 +389,11 @@ async def cli():
     announcer_launch_parser.add_argument("PRICE", type=float, help="Initial announcer price in USD per XCH")
 
     ## fasttrack (launch + approve) ##
+    # This function is intended for test purposes and will not work in practice
     announcer_fasttrack_parser = announcer_subparsers.add_parser(
         "fasttrack", help="Launch and approve an announcer", description="Launches and approves or approves an announcer. Requires a governance coin with empty bill to be available."
     )
-    announcer_fasttrack_parser.add_argument("PRICE", type=float, help="New announcer price in USD per XCH")
+    announcer_fasttrack_parser.add_argument("PRICE", nargs="?", type=float, default=None, help="New announcer price in USD per XCH. Optional when using --launcher-id option")
     announcer_fasttrack_parser.add_argument(
         "--launcher-id", type=str, help="Announcer launcher ID. Specify when announcer has already been launched but not approved yet"
     )
@@ -387,11 +434,13 @@ async def cli():
     oracle_subparsers = oracle_parser.add_subparsers(dest="action")
 
     ## show ##
-    oracle_subparsers.add_parser("show", help="Show oracle prices", description="Shows oracle prices.")
+    oracle_show_subparser = oracle_subparsers.add_parser("show", help="Show oracle prices", description="Shows oracle prices.")
+    oracle_show_subparser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
 
     ## update price ##
     oracle_update_parser = oracle_subparsers.add_parser("update", help="Update oracle price", description="Adds new price to Oracle price queue.")
     oracle_update_parser.add_argument("-i", "--info", action="store_true", help="Show info on whether Oracle can be updated")
+    oracle_update_parser.add_argument("-u", "--human-readable", action="store_true", help="Display numbers in human readable format")
 
     ### STATUTES ###
     statutes_parser = subparsers.add_parser("statutes", help="Manage statutes")
@@ -449,7 +498,10 @@ async def cli():
     rpc_client = CircuitRPCClient(args.base_url, args.private_key, args.add_sig_data, args.fee_per_cost)
     try:
         kwargs = dict(vars(args))
-        #print(kwargs)
+        #assert "info" in kwargs.keys(), "info not found"
+        #print(kwargs.keys())
+        if "info" in kwargs.keys():
+            print(f"{args.info=}")
         function_name = f"{args.command}_{args.action}"
         if "subaction" in kwargs.keys():
             function_name += f"_{args.subaction}"
