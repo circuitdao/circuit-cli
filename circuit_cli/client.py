@@ -282,6 +282,8 @@ class CircuitRPCClient:
             },
         )
         data = response.json()
+        print("ANNOUNCER SHOW")
+        pprint(data)
         assert isinstance(data, list)
         return data
 
