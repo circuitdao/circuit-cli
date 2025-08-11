@@ -30,7 +30,8 @@ class CircuitRPCClient:
             synthetic_public_keys = []
         self.synthetic_secret_keys = synthetic_secret_keys
         self.synthetic_public_keys = synthetic_public_keys
-        #print([encode_puzzle_hash(puzzle_hash_for_synthetic_public_key(x), "txch") for x in synthetic_public_keys[:5]])
+        print("Wallet first 5 addresses:")
+        print([encode_puzzle_hash(puzzle_hash_for_synthetic_public_key(x), "txch") for x in synthetic_public_keys[:5]])
         self.base_url = base_url
         self.client = httpx.Client(base_url=base_url, timeout=120)
         self.add_sig_data = add_sig_data
@@ -575,7 +576,7 @@ class CircuitRPCClient:
             response = self.client.post(
                 f"/announcers/{COIN_NAME}/",
                 json={
-                    "synthetic_pks": [keyp.to_bytes().hex() for key in self.synthetic_public_keys],
+                    "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                     "operation": "govern",
                     "args": {"toggle_activation": True, "implement_bundle": None},
                     "fee_per_cost": self.fee_per_cost,
@@ -1382,7 +1383,7 @@ class CircuitRPCClient:
             coin_name = data[0]["name"]
 
         response = self.client.post(
-            "/bills/new",
+            "/bills/propose",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "coin_name": coin_name,

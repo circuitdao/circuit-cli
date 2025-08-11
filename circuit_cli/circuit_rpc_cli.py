@@ -95,11 +95,11 @@ async def cli():
     parser.add_argument(
         "--base-url",
         type=str,
-        default="http://localhost:8000",
+        default=os.environ.get('BASE_URL', "http://localhost:8000"),
         help="Base URL for the Circuit RPC API server",
     )
-    parser.add_argument("--add-sig-data", type=str, help="Additional signature data")
-    parser.add_argument("--fee-per-cost", "-fpc", type=str, default=0, help="Add transaction fee, set as fee per cost.")
+    parser.add_argument("--add-sig-data", type=str, default=os.environ.get('ADD_SIG_DATA', ''), help="Additional signature data")
+    parser.add_argument("--fee-per-cost", "-fpc", type=str, default=int(os.environ.get('FEE_PER_COST', 0)), help="Add transaction fee, set as fee per cost.")
     parser.add_argument(
         "--private-key", "-p", type=str, default=os.environ.get("PRIVATE_KEY"), help="Private key for your coins"
     )
