@@ -26,12 +26,14 @@ class CircuitRPCClient:
             synthetic_secret_keys = generate_ssks(secret_key, 0, 500)
             synthetic_public_keys = [x.get_g1() for x in synthetic_secret_keys]
         else:
+            print("** No master private key found. Set environment variable PRIVATE_KEY or use --private-key cmd line option. **")
             synthetic_secret_keys = []
             synthetic_public_keys = []
         self.synthetic_secret_keys = synthetic_secret_keys
         self.synthetic_public_keys = synthetic_public_keys
-        print("Wallet first 5 addresses:")
-        print([encode_puzzle_hash(puzzle_hash_for_synthetic_public_key(x), "txch") for x in synthetic_public_keys[:5]])
+        if private_key:
+            print("Wallet first 5 addresses:")
+            print([encode_puzzle_hash(puzzle_hash_for_synthetic_public_key(x), "txch") for x in synthetic_public_keys[:5]])
         self.base_url = base_url
         self.client = httpx.Client(base_url=base_url, timeout=120)
         self.add_sig_data = add_sig_data
@@ -283,8 +285,8 @@ class CircuitRPCClient:
             },
         )
         data = response.json()
-        print("ANNOUNCER SHOW")
-        pprint(data)
+        #print("ANNOUNCER SHOW")
+        #pprint(data)
         assert isinstance(data, list)
         return data
 
@@ -442,9 +444,7 @@ class CircuitRPCClient:
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "operation": "exit",
-                "args": {
-                    #"melt": True,
-                },
+                "args": {},
                 "fee_per_cost": self.fee_per_cost,
             },
         )
