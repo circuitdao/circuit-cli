@@ -3,16 +3,14 @@ from copy import copy
 from typing import Any, Callable, List
 
 from chia.consensus.default_constants import DEFAULT_CONSTANTS
-#from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.types.coin_spend import CoinSpend
-from chia.types.spend_bundle import SpendBundle
-from chia.util.condition_tools import conditions_dict_for_solution, pkm_pairs_for_conditions_dict
+from chia.consensus.condition_tools import conditions_dict_for_solution, pkm_pairs_for_conditions_dict
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
     DEFAULT_HIDDEN_PUZZLE_HASH,
     calculate_synthetic_secret_key,
 )
-from chia_rs import AugSchemeMPL, G1Element, G2Element
-from chia_rs import PrivateKey
+
+from chia_rs import AugSchemeMPL, G1Element, G2Element, PrivateKey, SpendBundle
 from chia_rs.sized_bytes import bytes32
 
 

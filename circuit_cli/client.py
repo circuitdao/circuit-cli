@@ -4,21 +4,17 @@ import json
 import logging.config
 from math import ceil, floor
 
-import httpx
-from chia.types.spend_bundle import SpendBundle
 from chia.util.bech32m import encode_puzzle_hash
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
     puzzle_hash_for_synthetic_public_key,
 )
 from chia.wallet.util.debug_spend_bundle import debug_spend_bundle
-from chia_rs import PrivateKey
+
+from chia_rs import PrivateKey, SpendBundle
 
 from circuit_cli.utils import generate_ssks, sign_spends
 
 log = logging.getLogger(__name__)
-
-
-from pprint import pprint
 
 
 class CircuitRPCClient:
@@ -280,8 +276,6 @@ class CircuitRPCClient:
             },
         )
         data = response.json()
-        #print("ANNOUNCER SHOW")
-        #pprint(data)
         assert isinstance(data, list)
         return data
 
@@ -1496,16 +1490,22 @@ class CircuitRPCClient:
         return sig_response
 
     ### STATUTES ###
-    async def statutes_list(self, full=False):
+    async def statutes_list(self, exclude_statutes=False, full_statutes=False):
+
+        if exclude_statutes:
+            assert not full_statutes, "Cannot both exclude and provide full Statutes"
+
         response = self.client.post(
             "/statutes",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                "full": full,
-                # "fee_per_cost": self.fee_per_cost,
+                "full": full_statutes,
             },
         )
-        return response.json()
+        resp = response.json()
+        if exclude_statutes:
+            del resp["implemented_statutes"]
+        return resp
 
     async def statutes_update(self, info=False):
         if info:

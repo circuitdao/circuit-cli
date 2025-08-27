@@ -5,7 +5,7 @@ import httpx
 import pprint
 import json
 
-from chia.types.spend_bundle import SpendBundle
+from chia_rs import SpendBundle
 
 from circuit_cli.client import CircuitRPCClient
 
@@ -853,7 +853,10 @@ async def cli():
     ## list ##
     statutes_list_subparser = statutes_subparsers.add_parser("list", help="List Statutes")
     statutes_list_subparser.add_argument(
-        "-f", "--full", action="store_true", help="Show Statutes incl constraints and additional info"
+        "-e", "--exclude-statutes", action="store_true", help="Show Statutes coin info excluding Statutes"
+    )
+    statutes_list_subparser.add_argument(
+        "-f", "--full-statutes", action="store_true", help="Show Statutes incl constraints and additional info"
     )
 
     ## update price ##
