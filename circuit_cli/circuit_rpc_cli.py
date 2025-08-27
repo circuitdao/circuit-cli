@@ -3,6 +3,7 @@ import asyncio
 import os
 import httpx
 import pprint
+import json
 
 from chia.types.spend_bundle import SpendBundle
 
@@ -20,14 +21,16 @@ async def get_announcer_name(rpc_client, launcher_id: str = None):
 
 
 async def announcer_fasttrack(rpc_client, PRICE: float = None, launcher_id: str = None):
-    print("Fasttracking announcer")
+    print(f"Fasttracking announcer with price {PRICE} XCH/USD")
     MOJOS = rpc_client.consts["MOJOS"]
     if not launcher_id:
         print("Launching announcer...")
+        assert PRICE, "Must specify price when launching announcer via fasttrack"
         resp = await rpc_client.announcer_launch(PRICE=PRICE)
         print("Waiting for time to pass to launch announcer (farm blocks if in simulator)...")
         bundle = SpendBundle.from_json_dict(resp["bundle"])
         await rpc_client.wait_for_confirmation(bundle)
+        launcher_id = bundle.coin_spends[-1].coin.name().hex()
         print("Announcer launched.")
     launcher_id, coin_name = await get_announcer_name(rpc_client, launcher_id)
     print(f"  Launcher ID: {launcher_id}")
@@ -54,7 +57,6 @@ async def announcer_fasttrack(rpc_client, PRICE: float = None, launcher_id: str 
         create_conditions=True,
     )
     voting_anns = vote_data["announcements_to_vote_for"]
-    govern_bundle = SpendBundle.from_json_dict(vote_data["bundle"])
     bills = await rpc_client.bills_list()
     bill_name = bills[0]["name"]
     resp = await rpc_client.bills_propose(
@@ -76,7 +78,7 @@ async def announcer_fasttrack(rpc_client, PRICE: float = None, launcher_id: str 
     resp = await rpc_client.upkeep_announcers_approve(
         coin_name,
         bill_coin_name=bill_coin_name,
-        govern_bundle=govern_bundle,
+        #govern_bundle=json.dumps(govern_bundle),
     )
     print("Bill implemented. Announcer approved.")
     return resp
@@ -185,7 +187,7 @@ async def cli():
         "--bill-coin-name",
         type=str,
         default=None,
-        help="Implement previously proposed bill to approve the announcer",
+        help="Implement previously proposed bill to approve the announcer. This option requires a govern bundle (-g option) and secure solution condition (-s option) to be specified",
     )
     upkeep_announcers_disapprove_parser = upkeep_announcers_subparsers.add_parser(
         "disapprove",
@@ -204,7 +206,7 @@ async def cli():
         "--bill-coin-name",
         type=str,
         default=None,
-        help="Implement previously proposed bill to disapprove the announcer",
+        help="Implement previously proposed bill to disapprove the announcer. This option requires a govern bundle to be specified (-g option)",
     )
     upkeep_announcers_penalize_parser = upkeep_announcers_subparsers.add_parser(
         "penalize",
@@ -781,6 +783,7 @@ async def cli():
         default=None,
         help="[optional] Announcer coin name. Only required if user owns more than one announcer",
     )
+    announcer_configure_parser.add_argument("-a", "--make-approvable", action="store_true", help="Configure announcer so that is becomes approvable")
     announcer_configure_parser.add_argument("--deposit", type=float, help="New deposit amount in XCH")
     announcer_configure_parser.add_argument("--min-deposit", type=float, help="New minimum deposit amount in XCH")
     announcer_configure_parser.add_argument("--inner-puzzle-hash", type=int, help="New inner puzzle hash (re-key)")
@@ -940,6 +943,9 @@ async def cli():
         #    # not trying to broadcast a bundle and there was an error
         #    print(f"Error: {result['error']}")
         #    print(f"Command status: {result['status']}")
+        elif isinstance(result, dict) and "announcements_to_vote_for" in result.keys(): # and "bundle" in result.keys():
+            print(f"custom conditions to propose: {json.dumps(result['announcements_to_vote_for'])}")
+            #print(f"bundle: {json.dumps(result['bundle'])}")
         else:
             pprint.pprint(result)
     except (AttributeError, KeyError) as e:
