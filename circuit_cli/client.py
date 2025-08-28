@@ -224,12 +224,16 @@ class CircuitRPCClient:
         )
         return response.json()
 
-    async def savings_deposit(self, AMOUNT: float):
+    async def savings_deposit(self, AMOUNT: float, INTEREST: float = None, units=False):
+        amount = AMOUNT if units else int(AMOUNT * self.consts["MCAT"])
+        if INTEREST is not None:
+            interest = INTEREST if units else int(INTEREST * self.consts["MCAT"])
         response = self.client.post(
             "/savings/deposit",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                "amount": floor(AMOUNT * self.consts["MCAT"]),
+                "amount": amount, #floor(AMOUNT * self.consts["MCAT"]),
+                "treasury_withdraw_amount": interest if INTEREST is not None else None,
                 "fee_per_cost": self.fee_per_cost,
             },
         )
@@ -242,12 +246,16 @@ class CircuitRPCClient:
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
 
-    async def savings_withdraw(self, AMOUNT: float):
+    async def savings_withdraw(self, AMOUNT: float, INTEREST: float = None, units=False):
+        amount = AMOUNT if units else int(AMOUNT * self.consts["MCAT"])
+        if INTEREST is not None:
+            interest = INTEREST if units else int(INTEREST * self.consts["MCAT"])
         response = self.client.post(
             "/savings/withdraw",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                "amount": floor(AMOUNT * self.consts["MCAT"]),
+                "amount": amount, #floor(AMOUNT * self.consts["MCAT"]),
+                "treasury_withdraw_amount": interest if INTEREST is not None else None,
                 "fee_per_cost": self.fee_per_cost,
             },
         )
