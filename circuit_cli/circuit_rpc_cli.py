@@ -2,12 +2,15 @@ import argparse
 import asyncio
 import os
 import httpx
-import pprint
 import json
 
-from chia.types.spend_bundle import SpendBundle
+from chia_rs import SpendBundle
 
 from circuit_cli.client import CircuitRPCClient
+from circuit_cli.json_formatter import format_circuit_response
+import logging
+
+log = logging.getLogger(__name__)
 
 
 async def get_announcer_name(rpc_client, launcher_id: str = None):
@@ -78,7 +81,7 @@ async def announcer_fasttrack(rpc_client, PRICE: float = None, launcher_id: str 
     resp = await rpc_client.upkeep_announcers_approve(
         coin_name,
         bill_coin_name=bill_coin_name,
-        #govern_bundle=json.dumps(govern_bundle),
+        # govern_bundle=json.dumps(govern_bundle),
     )
     print("Bill implemented. Announcer approved.")
     return resp
@@ -106,6 +109,7 @@ async def cli():
     parser.add_argument(
         "--private-key", "-p", type=str, default=os.environ.get("PRIVATE_KEY"), help="Private key for your coins"
     )
+    parser.add_argument("-j", "--json", action="store_true", help="Return JSON instead of human readable output")
 
     ### UPKEEP ###
     upkeep_parser = subparsers.add_parser("upkeep", help="Commands to upkeep protocol and RPC server")
@@ -166,9 +170,6 @@ async def cli():
     )
     upkeep_announcers_list_parser.add_argument(
         "--incl-spent", action="store_true", help="Include spent announcer coins"
-    )
-    upkeep_announcers_list_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
     )
     upkeep_announcers_approve_parser = upkeep_announcers_subparsers.add_parser(
         "approve",
@@ -285,9 +286,6 @@ async def cli():
         default=None,
         help="Only list governance coins with given bill (excl propsal times). Specify as program in hex format",
     )
-    upkeep_bills_list_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
     upkeep_bills_list_parser.add_argument("--incl-spent", action="store_true", help="Include spent governance coins")
 
     ## registry ##
@@ -296,9 +294,6 @@ async def cli():
     # show
     upkeep_registry_show_parser = upkeep_registry_subparsers.add_parser(
         "show", help="Show Announcer Registry", description="Shows Announcer Registry."
-    )
-    upkeep_registry_show_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
     )
     # distribute rewards
     upkeep_registry_reward_parser = upkeep_registry_subparsers.add_parser(
@@ -315,9 +310,6 @@ async def cli():
     upkeep_registry_reward_parser.add_argument(
         "-i", "--info", action="store_true", help="Show info on whether rewards can be distributed"
     )
-    upkeep_registry_reward_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
 
     ## recharge auctions ##
     upkeep_recharge_parser = upkeep_subparsers.add_parser(
@@ -327,9 +319,6 @@ async def cli():
     # list
     upkeep_recharge_list_parser = upkeep_recharge_subparsers.add_parser(
         "list", help="List recharge auctions", description="Lists recharge auctions."
-    )
-    upkeep_recharge_list_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
     )
     # launch
     upkeep_recharge_launch_parser = upkeep_recharge_subparsers.add_parser(
@@ -387,9 +376,6 @@ async def cli():
         action="store_true",
         help="Show info on a potential bid. If no intended BYC bid amount is specified, the minimum admissible amount is assumed.",
     )
-    upkeep_recharge_bid_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
     # settle
     upkeep_recharge_settle_parser = upkeep_recharge_subparsers.add_parser(
         "settle", help="Settle a recharge auction", description="Settles a recharge auction."
@@ -404,9 +390,6 @@ async def cli():
     # list
     upkeep_surplus_list_parser = upkeep_surplus_subparsers.add_parser(
         "list", help="List surplus auctions", description="Lists surplus auctions."
-    )
-    upkeep_surplus_list_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
     )
     # start
     upkeep_surplus_start_parser = upkeep_surplus_subparsers.add_parser(
@@ -429,9 +412,6 @@ async def cli():
         help="Puzzle hash to which BYC is sent if bid wins auction. Default is puzzle hash of funding coin selected by driver.",
     )
     upkeep_surplus_bid_parser.add_argument("-i", "--info", action="store_true", help="Show info on a potential bid")
-    upkeep_surplus_bid_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
     # settle
     upkeep_surplus_settle_parser = upkeep_surplus_subparsers.add_parser(
         "settle", help="Settle a surplus auction", description="Settles a surplus auction."
@@ -446,9 +426,6 @@ async def cli():
     # show
     upkeep_treasury_show_parser = upkeep_treasury_subparsers.add_parser(
         "show", help="Show treasury", description="Shows information on treasury."
-    )
-    upkeep_treasury_show_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
     )
     # rebalance
     upkeep_treasury_rebalance_parser = upkeep_treasury_subparsers.add_parser(
@@ -504,9 +481,6 @@ async def cli():
     )
     upkeep_vaults_list_parser.add_argument(
         "-n", "--not-seized", action="store_true", help="Only list non-seized vaults"
-    )
-    upkeep_vaults_list_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
     )
     # LATER: add option for only listing liquidatable/in liquidation/restartable/in bad debt vaults
     # LATER: add -o/--ordered arg to order by outstanding SFs
@@ -595,9 +569,6 @@ async def cli():
         type=str,
         help="Governance coins with specified bill (excl propsal times). Must be program in hex format",
     )
-    bills_list_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
     bills_list_parser.add_argument("--incl-spent", action="store_true", help="Include spent governance coins")
 
     ## toggle governance mode ##
@@ -608,9 +579,6 @@ async def cli():
     )
     bills_toggle_parser.add_argument("COIN_NAME", type=str, help="Coin name")
     bills_toggle_parser.add_argument("-i", "--info", action="store_true", help="Show info on toggling governance mode")
-    bills_toggle_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
 
     ## propose ##
     bills_propose_parser = bills_subparsers.add_parser("propose", help="Propose a new bill")
@@ -653,9 +621,6 @@ async def cli():
     bills_implement_subparser.add_argument(
         "-i", "--info", action="store_true", help="Show info on when next bill can be implemented"
     )
-    bills_implement_subparser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
 
     ## reset ##
     bills_reset_subparser = bills_subparsers.add_parser(
@@ -673,9 +638,6 @@ async def cli():
         help="Get wallet balances",
         description="Show wallet balances for XCH, BYC, and CRT coins not in governance mode.",
     )
-    wallet_balances_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
 
     ## coins ##
     wallet_coins_parser = wallet_subparsers.add_parser(
@@ -690,9 +652,6 @@ async def cli():
         choices=["xch", "byc", "crt", "all", "gov", "empty", "bill"],
         help="Return coins of given type only",
     )
-    wallet_coins_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
 
     ## toggle governance mode ##
     wallet_toggle_parser = wallet_subparsers.add_parser(
@@ -702,9 +661,6 @@ async def cli():
     )
     wallet_toggle_parser.add_argument("COIN_NAME", type=str, help="Coin name")
     wallet_toggle_parser.add_argument("-i", "--info", action="store_true", help="Show info on toggling governance mode")
-    wallet_toggle_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
 
     ### ANNOUNCER ###
     announcer_parser = subparsers.add_parser("announcer", help="Announcer commands")
@@ -748,9 +704,6 @@ async def cli():
         "-p", "--penalizable", action="store_true", help="Show announcer only if penalizable"
     )
     announcer_show_subparser.add_argument("--incl-spent", action="store_true", help="Include spent announcer coins")
-    announcer_show_subparser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
 
     ## update price ##
     announcer_update_parser = announcer_subparsers.add_parser(
@@ -783,7 +736,9 @@ async def cli():
         default=None,
         help="[optional] Announcer coin name. Only required if user owns more than one announcer",
     )
-    announcer_configure_parser.add_argument("-a", "--make-approvable", action="store_true", help="Configure announcer so that is becomes approvable")
+    announcer_configure_parser.add_argument(
+        "-a", "--make-approvable", action="store_true", help="Configure announcer so that is becomes approvable"
+    )
     announcer_configure_parser.add_argument("--deposit", type=float, help="New deposit amount in XCH")
     announcer_configure_parser.add_argument("--min-deposit", type=float, help="New minimum deposit amount in XCH")
     announcer_configure_parser.add_argument("--inner-puzzle-hash", type=int, help="New inner puzzle hash (re-key)")
@@ -831,9 +786,6 @@ async def cli():
     oracle_show_subparser = oracle_subparsers.add_parser(
         "show", help="Show oracle prices", description="Shows oracle prices."
     )
-    oracle_show_subparser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
 
     ## update price ##
     oracle_update_parser = oracle_subparsers.add_parser(
@@ -841,9 +793,6 @@ async def cli():
     )
     oracle_update_parser.add_argument(
         "-i", "--info", action="store_true", help="Show info on whether Oracle can be updated"
-    )
-    oracle_update_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
     )
 
     ### STATUTES ###
@@ -868,9 +817,6 @@ async def cli():
 
     ## show ##
     vault_show_parser = vault_subparsers.add_parser("show", help="Show vault")
-    vault_show_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
 
     ## deposit ##
     vault_deposit_subparser = vault_subparsers.add_parser("deposit", help="Deposit to vault")
@@ -894,9 +840,6 @@ async def cli():
 
     ## show ##
     savings_show_parser = savings_subparsers.add_parser("show", help="Show vault")
-    savings_show_parser.add_argument(
-        "-u", "--human-readable", action="store_true", help="Display numbers in human readable format"
-    )
 
     ## deposit ##
     savings_deposit_subparser = savings_subparsers.add_parser("deposit", help="Deposit to vault")
@@ -908,6 +851,22 @@ async def cli():
 
     args = parser.parse_args()
     rpc_client = CircuitRPCClient(args.base_url, args.private_key, args.add_sig_data, args.fee_per_cost)
+
+    # Load protocol constants with improved error handling
+    try:
+        response = await rpc_client.client.get("/protocol/constants")
+        response.raise_for_status()
+        data = response.json()
+        rpc_client.consts = {
+            "PRICE_PRECISION": 10 ** data["xch_usd_price_decimals"],
+            "MOJOS": data["mojos_per_xch"],
+            "MCAT": 10 ** data["cat_decimals"],
+        }
+        log.info("Protocol constants loaded successfully")
+    except Exception as e:
+        log.error(f"Failed to load protocol constants: {e}")
+        log.warning("Using default constants - some functionality may be limited")
+        # Set default constants so client can still be used for testing
     try:
         kwargs = dict(vars(args))
         # assert "info" in kwargs.keys(), "info not found"
@@ -924,37 +883,33 @@ async def cli():
         del kwargs["private_key"]
         del kwargs["add_sig_data"]
         del kwargs["fee_per_cost"]
+        del kwargs["json"]
         if args.command == "announcer" and args.action == "fasttrack":
             # special case for fasttrack
             result = await announcer_fasttrack(rpc_client, **kwargs)
         else:
             # run commands method dynamically based on the parser command
-            print(f"running {function_name} with kwargs {kwargs}")
             result = await getattr(rpc_client, f"{function_name}")(**kwargs)
 
         if isinstance(result, dict) and "bundle" in result.keys() and "status" in result.keys():
             # we assume we are dealing with a spend bundle that was broadcast
             # all we care about is whether broadcast was successful or not
             print(f"Command status: {result['status']}")
-        # if (
-        #        isinstance(result, dict) and not "bundle" in result.keys()
-        #        and "status" in result.keys() and "error" in result.keys()
-        # ):
-        #    # not trying to broadcast a bundle and there was an error
-        #    print(f"Error: {result['error']}")
-        #    print(f"Command status: {result['status']}")
-        elif isinstance(result, dict) and "announcements_to_vote_for" in result.keys(): # and "bundle" in result.keys():
+        elif (
+            isinstance(result, dict) and "announcements_to_vote_for" in result.keys()
+        ):  # and "bundle" in result.keys():
             print(f"custom conditions to propose: {json.dumps(result['announcements_to_vote_for'])}")
-            #print(f"bundle: {json.dumps(result['bundle'])}")
+            # print(f"bundle: {json.dumps(result['bundle'])}")
         else:
-            pprint.pprint(result)
+            if args.json:
+                print(json.dumps(result))
+            else:
+                print(format_circuit_response(result))
     except (AttributeError, KeyError) as e:
         print(e)
         parser.print_help()
     except httpx.HTTPStatusError as err:
         print(err.args[0])
-    finally:
-        rpc_client.close()
 
 
 def main():
