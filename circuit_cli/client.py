@@ -232,7 +232,7 @@ class CircuitRPCClient:
             "/savings/deposit",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                "amount": amount, #floor(AMOUNT * self.consts["MCAT"]),
+                "amount": amount,
                 "treasury_withdraw_amount": interest if INTEREST is not None else None,
                 "fee_per_cost": self.fee_per_cost,
             },
@@ -254,7 +254,7 @@ class CircuitRPCClient:
             "/savings/withdraw",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                "amount": amount, #floor(AMOUNT * self.consts["MCAT"]),
+                "amount": amount,
                 "treasury_withdraw_amount": interest if INTEREST is not None else None,
                 "fee_per_cost": self.fee_per_cost,
             },
