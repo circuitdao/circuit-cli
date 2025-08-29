@@ -29,7 +29,7 @@ async def announcer_fasttrack(rpc_client, PRICE: float = None, launcher_id: str 
     if not launcher_id:
         print("Launching announcer...")
         assert PRICE, "Must specify price when launching announcer via fasttrack"
-        resp = await rpc_client.announcer_launch(PRICE=PRICE)
+        resp = await rpc_client.announcer_launch(price=PRICE)
         print("Waiting for time to pass to launch announcer (farm blocks if in simulator)...")
         bundle = SpendBundle.from_json_dict(resp["bundle"])
         await rpc_client.wait_for_confirmation(bundle)
@@ -100,6 +100,9 @@ async def cli():
         "--add-sig-data", type=str, default=os.environ.get("ADD_SIG_DATA", ""), help="Additional signature data"
     )
     parser.add_argument(
+        "--no-wait", type=str, default=os.environ.get("NO_WAIT_TX", ""), help="Don't wait for tx to be confirmed."
+    )
+    parser.add_argument(
         "--fee-per-cost",
         "-fpc",
         type=str,
@@ -153,10 +156,10 @@ async def cli():
     upkeep_announcers_list_parser = upkeep_announcers_subparsers.add_parser(
         "list",
         help="List announcers",
-        description="Lists approved announcers. If COIN_NAME is specified, info for only this one announcer will be shown, whether approved or not",
+        description="Lists approved announcers. If coin_name is specified, info for only this one announcer will be shown, whether approved or not",
     )
     upkeep_announcers_list_parser.add_argument(
-        "COIN_NAME",
+        "coin_name",
         nargs="?",
         type=str,
         default=None,
@@ -176,7 +179,7 @@ async def cli():
         help="Approve an announcer",
         description="Approves an announcer to be used for oracle price updates.",
     )
-    upkeep_announcers_approve_parser.add_argument("COIN_NAME", type=str, help="Name of announcer")
+    upkeep_announcers_approve_parser.add_argument("coin_name", type=str, help="Name of announcer")
     upkeep_announcers_approve_parser.add_argument(
         "-c",
         "--create-conditions",
@@ -184,8 +187,7 @@ async def cli():
         help="Create custom conditions for bill to approve the announcer",
     )
     upkeep_announcers_approve_parser.add_argument(
-        "-b",
-        "--bill-coin-name",
+        "bill_coin_name",
         type=str,
         default=None,
         help="Implement previously proposed bill to approve the announcer. This option requires a govern bundle (-g option) and secure solution condition (-s option) to be specified",
@@ -195,7 +197,7 @@ async def cli():
         help="Disapprove an announcer",
         description="Disapproves an announcer so that it can no longer be used for oracle price updates.",
     )
-    upkeep_announcers_disapprove_parser.add_argument("COIN_NAME", type=str, help="Name of announcer")
+    upkeep_announcers_disapprove_parser.add_argument("coin_name", type=str, help="Name of announcer")
     upkeep_announcers_disapprove_parser.add_argument(
         "-c",
         "--create-conditions",
@@ -215,7 +217,7 @@ async def cli():
         description="Penalizes an announcer.",
     )
     upkeep_announcers_penalize_parser.add_argument(
-        "COIN_NAME", nargs="?", type=str, default=None, help="[optional] Name of announcer"
+        "coin_name", nargs="?", type=str, default=None, help="[optional] Name of announcer"
     )
 
     ## bills ##
@@ -341,12 +343,12 @@ async def cli():
     upkeep_recharge_start_parser = upkeep_recharge_subparsers.add_parser(
         "start", help="Start a recharge auction", description="Starts a recharge auction."
     )
-    upkeep_recharge_start_parser.add_argument("COIN_NAME", type=str, help="Name of recharge auction coin")
+    upkeep_recharge_start_parser.add_argument("coin_name", type=str, help="Name of recharge auction coin")
     # bid
     upkeep_recharge_bid_parser = upkeep_recharge_subparsers.add_parser(
         "bid", help="Bid in a recharge auction", description="Submits a bid in a recharge auction."
     )
-    upkeep_recharge_bid_parser.add_argument("COIN_NAME", type=str, help="Name of recharge auction coin")
+    upkeep_recharge_bid_parser.add_argument("coin_name", type=str, help="Name of recharge auction coin")
     upkeep_recharge_bid_parser.add_argument(
         "BYC_AMOUNT",
         nargs="?",
@@ -380,7 +382,7 @@ async def cli():
     upkeep_recharge_settle_parser = upkeep_recharge_subparsers.add_parser(
         "settle", help="Settle a recharge auction", description="Settles a recharge auction."
     )
-    upkeep_recharge_settle_parser.add_argument("COIN_NAME", type=str, help="Name of recharge auction coin")
+    upkeep_recharge_settle_parser.add_argument("coin_name", type=str, help="Name of recharge auction coin")
 
     ## surplus auctions ##
     upkeep_surplus_parser = upkeep_subparsers.add_parser(
@@ -399,7 +401,7 @@ async def cli():
     upkeep_surplus_bid_parser = upkeep_surplus_subparsers.add_parser(
         "bid", help="Bid in a surplus auction", description="Submits a bid in a surplus auction."
     )
-    upkeep_surplus_bid_parser.add_argument("COIN_NAME", type=str, help="Name of surplus auction coin")
+    upkeep_surplus_bid_parser.add_argument("coin_name", type=str, help="Name of surplus auction coin")
     upkeep_surplus_bid_parser.add_argument(
         "AMOUNT", nargs="?", type=float, default=None, help="Amount of CRT to bid. Optional when -i option is set."
     )
@@ -416,7 +418,7 @@ async def cli():
     upkeep_surplus_settle_parser = upkeep_surplus_subparsers.add_parser(
         "settle", help="Settle a surplus auction", description="Settles a surplus auction."
     )
-    upkeep_surplus_settle_parser.add_argument("COIN_NAME", type=str, help="Name of surplus auction coin")
+    upkeep_surplus_settle_parser.add_argument("coin_name", type=str, help="Name of surplus auction coin")
 
     ## treasury ##
     upkeep_treasury_parser = upkeep_subparsers.add_parser(
@@ -470,7 +472,7 @@ async def cli():
         "list", help="List all vaults", description="Shows information on all collateral vaults."
     )
     upkeep_vaults_list_parser.add_argument(
-        "COIN_NAME",
+        "coin_name",
         nargs="?",
         type=str,
         default=None,
@@ -490,7 +492,7 @@ async def cli():
         description="Transfers stability fees from specified collateral vault to treasury.",
     )
     upkeep_vaults_transfer_parser.add_argument(
-        "COIN_NAME",
+        "coin_name",
         nargs="?",
         type=str,
         default=None,
@@ -499,18 +501,18 @@ async def cli():
     upkeep_vaults_liquidate_parser = upkeep_vaults_subparsers.add_parser(
         "liquidate", help="Liquidate a vault", description="Starts or restarts a liquidation auction."
     )
-    upkeep_vaults_liquidate_parser.add_argument("COIN_NAME", type=str, help="Name of vault to liquidate")
+    upkeep_vaults_liquidate_parser.add_argument("coin_name", type=str, help="Name of vault to liquidate")
     upkeep_vaults_bid_parser = upkeep_vaults_subparsers.add_parser(
         "bid", help="Bid in a liquidation auction", description="Submits a bid in a liquidation auction."
     )
-    upkeep_vaults_bid_parser.add_argument("COIN_NAME", type=str, help="Name of vault in liquidation")
+    upkeep_vaults_bid_parser.add_argument("coin_name", type=str, help="Name of vault in liquidation")
     upkeep_vaults_bid_parser.add_argument("AMOUNT", type=float, help="Amount of BYC to bid")
     # upkeep_vaults_auction_parser.add_argument("-s", "--start", action="store_true", help="Start or restart a liquidation auction")
     # upkeep_vaults_auction_parser.add_argument("-b", "--bid-amount", type=int, help="Submit a bid in a liquidation auction. Specify bid amount in mBYC")
     upkeep_vaults_recover_parser = upkeep_vaults_subparsers.add_parser(
         "recover", help="Recover bad debt", description="Recovers bad debt from a collateral vault."
     )
-    upkeep_vaults_recover_parser.add_argument("COIN_NAME", type=str, help="Vault ID")
+    upkeep_vaults_recover_parser.add_argument("coin_name", type=str, help="Vault ID")
 
     ### BILLS ###
     bills_parser = subparsers.add_parser("bills", help="Command to manage bills and governance")
@@ -577,7 +579,7 @@ async def cli():
         help="Convert a plain CRT coin into a governance coin or vice versa",
         description="If coin is in governance mode, exit to plain CRT. If coin is plain CRT, activate governance mode.",
     )
-    bills_toggle_parser.add_argument("COIN_NAME", type=str, help="Coin name")
+    bills_toggle_parser.add_argument("coin_name", type=str, help="Coin name")
     bills_toggle_parser.add_argument("-i", "--info", action="store_true", help="Show info on toggling governance mode")
 
     ## propose ##
@@ -616,7 +618,7 @@ async def cli():
         "implement", help="Implement a bill into statute", description="Implement a bill."
     )
     bills_implement_subparser.add_argument(
-        "COIN_NAME", nargs="?", default=None, type=str, help="[optional] Coin name of bill to implement"
+        "coin_name", nargs="?", default=None, type=str, help="[optional] Coin name of bill to implement"
     )
     bills_implement_subparser.add_argument(
         "-i", "--info", action="store_true", help="Show info on when next bill can be implemented"
@@ -626,7 +628,7 @@ async def cli():
     bills_reset_subparser = bills_subparsers.add_parser(
         "reset", help="Reset a bill", description="Sets bill of a governance coin to nil."
     )
-    bills_reset_subparser.add_argument("COIN_NAME", type=str, help="Coin name")
+    bills_reset_subparser.add_argument("coin_name", type=str, help="Coin name")
 
     ### WALLET ###
     wallet_parser = subparsers.add_parser("wallet", help="Wallet commands")
@@ -659,7 +661,7 @@ async def cli():
         help="Convert a plain CRT coin into a governance coin or vice versa",
         description="If coin is in governance mode, exit to plain CRT. If coin is plain CRT, activate governance mode.",
     )
-    wallet_toggle_parser.add_argument("COIN_NAME", type=str, help="Coin name")
+    wallet_toggle_parser.add_argument("coin_name", type=str, help="Coin name")
     wallet_toggle_parser.add_argument("-i", "--info", action="store_true", help="Show info on toggling governance mode")
 
     ### ANNOUNCER ###
@@ -713,7 +715,7 @@ async def cli():
     )
     announcer_update_parser.add_argument("PRICE", type=float, help="New announcer price in USD per XCH")
     announcer_update_parser.add_argument(
-        "COIN_NAME",
+        "coin_name",
         nargs="?",
         type=str,
         default=None,
@@ -730,7 +732,7 @@ async def cli():
         "configure", help="Configure the announcer", description="Configures the announcer."
     )
     announcer_configure_parser.add_argument(
-        "COIN_NAME",
+        "coin_name",
         nargs="?",
         type=str,
         default=None,
@@ -757,7 +759,7 @@ async def cli():
         description="Registers an Announcer with Announcer Registry to be eligible for CRT Rewards.",
     )
     announcer_register_parser.add_argument(
-        "COIN_NAME",
+        "coin_name",
         nargs="?",
         type=str,
         default=None,
@@ -771,7 +773,7 @@ async def cli():
         description="Exit announcer layer by melting announcer into plain XCH coin.",
     )
     announcer_exit_parser.add_argument(
-        "COIN_NAME",
+        "coin_name",
         nargs="?",
         type=str,
         default=None,
@@ -853,7 +855,13 @@ async def cli():
     savings_withdraw_subparser.add_argument("AMOUNT", type=float, help="Amount of BYC to withdraw")
 
     args = parser.parse_args()
-    rpc_client = CircuitRPCClient(args.base_url, args.private_key, args.add_sig_data, args.fee_per_cost)
+    rpc_client = CircuitRPCClient(
+        base_url=args.base_url,
+        private_key=args.private_key,
+        add_sig_data=args.add_sig_data,
+        fee_per_cost=args.fee_per_cost,
+        no_wait_for_tx=args.no_wait,
+    )
 
     # Load protocol constants with improved error handling
     try:
@@ -871,9 +879,7 @@ async def cli():
         log.warning("Using default constants - some functionality may be limited")
         # Set default constants so client can still be used for testing
     try:
-        kwargs = dict(vars(args))
-        # assert "info" in kwargs.keys(), "info not found"
-        # print(kwargs.keys())
+        kwargs = dict([(k.lower(), v) for k, v in vars(args).items()])
         if "info" in kwargs.keys():
             print(f"{args.info=}")
         function_name = f"{args.command}_{args.action}"
@@ -887,32 +893,30 @@ async def cli():
         del kwargs["add_sig_data"]
         del kwargs["fee_per_cost"]
         del kwargs["json"]
+        del kwargs["no_wait"]
         if args.command == "announcer" and args.action == "fasttrack":
             # special case for fasttrack
             result = await announcer_fasttrack(rpc_client, **kwargs)
         else:
-            # run commands method dynamically based on the parser command
-            result = await getattr(rpc_client, f"{function_name}")(**kwargs)
+            log.info(f"Calling {function_name} with {kwargs}")
+            try:
+                # run commands method dynamically based on the parser command
+                result = await getattr(rpc_client, f"{function_name}")(**kwargs)
+            except AssertionError as ae:
+                # return error message with status
+                result = {"error": str(ae)}
 
-        if isinstance(result, dict) and "bundle" in result.keys() and "status" in result.keys():
-            # we assume we are dealing with a spend bundle that was broadcast
-            # all we care about is whether broadcast was successful or not
-            print(f"Command status: {result['status']}")
-        elif (
-            isinstance(result, dict) and "announcements_to_vote_for" in result.keys()
-        ):  # and "bundle" in result.keys():
-            print(f"custom conditions to propose: {json.dumps(result['announcements_to_vote_for'])}")
-            # print(f"bundle: {json.dumps(result['bundle'])}")
+        if args.json:
+            print(json.dumps(result))
         else:
-            if args.json:
-                print(json.dumps(result))
-            else:
-                print(format_circuit_response(result))
+            print(format_circuit_response(result))
     except (AttributeError, KeyError) as e:
-        print(e)
+        log.exception(f"Failed to run command: {e}")
         parser.print_help()
     except httpx.HTTPStatusError as err:
         print(err.args[0])
+    except:
+        log.exception("Unexpected error")
 
 
 def main():

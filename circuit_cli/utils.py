@@ -94,8 +94,6 @@ async def sign_spends(coin_spends: List[CoinSpend], private_keys: List[PrivateKe
         )
     except Exception as e:
         print("Failed to sign spends", e)
-        bundle = SpendBundle(coin_spends, G2Element())
-        bundle.debug()
         raise
     assert bundle and isinstance(bundle, SpendBundle)
     return bundle

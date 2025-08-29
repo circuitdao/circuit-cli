@@ -47,13 +47,15 @@ class CircuitRPCClient:
         add_sig_data: str = None,
         fee_per_cost: int = 0,
         client: Optional[AsyncClient] = None,
+        key_count: int = 500,
+        no_wait_for_tx: bool = False,
     ):
         # Setup console-friendly logging
         setup_console_logging()
 
         if private_key:
             secret_key = PrivateKey.from_bytes(bytes.fromhex(private_key))
-            synthetic_secret_keys = generate_ssks(secret_key, 0, 500)
+            synthetic_secret_keys = generate_ssks(secret_key, 0, key_count)
             synthetic_public_keys = [x.get_g1() for x in synthetic_secret_keys]
         else:
             log.warning(
@@ -79,6 +81,7 @@ class CircuitRPCClient:
         log.info(f"Using add_sig_data={add_sig_data}")
         self.add_sig_data = add_sig_data
         self.fee_per_cost = fee_per_cost
+        self.no_wait_for_confirmation = no_wait_for_tx
 
     @property
     def synthetic_pks_hex(self) -> list[str]:
@@ -108,6 +111,7 @@ class CircuitRPCClient:
             APIError: If the request fails
         """
         try:
+            log.info(f"Making request to {method} {endpoint} with params {params} and json_data {json_data}")
             if method.upper() == "GET":
                 response = await self.client.get(endpoint, params=params)
             elif method.upper() == "POST":
@@ -181,21 +185,26 @@ class CircuitRPCClient:
         Returns:
             Response from sign_and_push
         """
+        log.info("Processing transaction: %s", endpoint)
         # Make API request to get bundle
         response_data = await self._make_api_request("POST", endpoint, payload)
 
         # Extract bundle from response
         bundle_data = response_data.get("bundle")
-        if not bundle_data:
+        bundle = None
+        if bundle_data:
+            bundle = SpendBundle.from_json_dict(bundle_data["bundle"])
+        elif response_data.get("coin_spends"):
+            bundle = SpendBundle.from_json_dict(response_data)
+        if not bundle:
             raise APIError(f"No bundle in response from {endpoint}")
-
-        bundle = SpendBundle.from_json_dict(bundle_data)
-
+        log.info("Bundle extracted from response: %s", bundle.name().hex())
         # Sign and push transaction
         sig_response = await self.sign_and_push(bundle, error_handling_info)
 
         # Wait for confirmation
         signed_bundle = SpendBundle.from_json_dict(sig_response["bundle"])
+        log.info("Waiting for confirmation of transaction ID %s", signed_bundle.name().hex())
         await self.wait_for_confirmation(signed_bundle)
 
         return sig_response
@@ -225,9 +234,11 @@ class CircuitRPCClient:
         return data["name"]
 
     async def wait_for_confirmation(self, bundle: SpendBundle = None, blocks=None):
+        if self.no_wait_for_confirmation:
+            return True
         if bundle is not None and isinstance(bundle, SpendBundle):
             while True:
-                response = self.client.post("/transactions/status", json={"bundle": bundle.to_json_dict()})
+                response = await self.client.post("/transactions/status", json={"bundle": bundle.to_json_dict()})
                 if response.status_code != 200:
                     print(response.content)
                     response.raise_for_status()
@@ -252,21 +263,16 @@ class CircuitRPCClient:
             add_data=self.add_sig_data,
         )
         assert isinstance(signed_bundle, SpendBundle)
-        response = self.client.post(
+        log.info("Signed bundle: %s, pushing", signed_bundle.name().hex())
+        response = await self.client.post(
             "/sign_and_push",
             json={
                 "bundle_dict": signed_bundle.to_json_dict(),
                 "signature": signed_bundle.aggregated_signature.to_bytes().hex(),
                 "error_handling_info": error_handling_info,
             },
-            # timeout=30, # LATER: needed?
         )
-        if response.status_code != 200:
-            try:
-                log.warning(response.json().get("detail"))
-            except Exception:
-                log.error("Error from sign_and_push:", response.content)
-            response.raise_for_status()
+        response.raise_for_status()
         log.info("Transaction signed and broadcast. ID %s", signed_bundle.name().hex())
         return response.json()
 
@@ -539,12 +545,16 @@ class CircuitRPCClient:
         assert isinstance(data, list)
         return data
 
-    async def announcer_launch(self, PRICE, units=False):
+    async def announcer_launch(self, price, units=False):
         """Launch announcer using DRY transaction processing."""
-        price = PRICE if units else self._convert_amount(PRICE, "PRICE")
-        print(f"LAUNCHING ANNOUNCER {price=}")
+        log.info("Launching announcer...")
+        price = price if units else self._convert_amount(price, "PRICE")
         payload = self._build_transaction_payload({"operation": "launch", "args": {"price": price}})
-        return await self._process_transaction("/announcers/launch/", payload)
+        log.info(f"Launching announcer with price: {price}")
+        try:
+            return await self._process_transaction("/announcers/launch/", payload)
+        finally:
+            log.info("Launching announcer successful.")
 
     async def announcer_configure(
         self,
@@ -677,8 +687,7 @@ class CircuitRPCClient:
     ):
         if create_conditions:
             assert bill_coin_name is None, "Cannot create custom conditions and implement bill at the same time"
-            print(f"Generating custom conditions for bill to approve announcer {coin_name}")
-            response = self.client.post(
+            response = await self.client.post(
                 f"/announcers/{coin_name}/",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -693,8 +702,7 @@ class CircuitRPCClient:
             return response.json()
         else:
             assert bill_coin_name is not None, "Must specify bill to implement when not creating custom conditions"
-            print(f"Implementing bill {bill_coin_name} to approve announcer {coin_name}")
-            bill_response = self.client.post(
+            bill_response = await self.client.post(
                 "/bills/implement",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -708,7 +716,7 @@ class CircuitRPCClient:
             bill_response_dict = bill_response.json()
             implement_bundle = bill_response_dict["bundle"]
             statutes_mutation_spend = bill_response_dict["statutes_mutation_spend"]
-            govern_response = self.client.post(
+            govern_response = await self.client.post(
                 f"/announcers/{coin_name}/",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -734,7 +742,7 @@ class CircuitRPCClient:
         if create_conditions:
             assert bill_coin_name is None, "Cannot create custom conditions and implement bill at the same time"
             print(f"Generating custom conditions for bill to disapprove announcer {coin_name}")
-            response = self.client.post(
+            response = await self.client.post(
                 f"/announcers/{coin_name}/",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -750,7 +758,7 @@ class CircuitRPCClient:
         else:
             assert bill_coin_name is not None, "Must specify bill to implement when not creating custom conditions"
             print(f"Implementing bill {bill_coin_name} to disapprove announcer {coin_name}")
-            bill_response = self.client.post(
+            bill_response = await self.client.post(
                 "/bills/implement",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -764,7 +772,7 @@ class CircuitRPCClient:
             bill_response_dict = bill_response.json()
             implement_bundle = bill_response_dict["bundle"]
             statutes_mutation_spend = bill_response_dict["statutes_mutation_spend"]
-            govern_response = self.client.post(
+            govern_response = await self.client.post(
                 f"/announcers/{coin_name}/",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -788,7 +796,7 @@ class CircuitRPCClient:
 
     async def upkeep_announcers_penalize(self, coin_name=None):
         if coin_name is None:
-            response = self.client.post(
+            response = await self.client.post(
                 "/announcers",
                 json={
                     "synthetic_pks": [],
@@ -802,7 +810,7 @@ class CircuitRPCClient:
         else:
             coin_name = coin_name
 
-        response = self.client.post(
+        response = await self.client.post(
             f"/announcers/{coin_name}/",
             json={
                 "synthetic_pks": [],
@@ -872,7 +880,7 @@ class CircuitRPCClient:
         if create_conditions:
             assert bill_coin_name is None, "Cannot create custom conditions and implement bill at the same time"
             print("Generating custom conditions for bill to launch recharge auction coin")
-            response = self.client.post(
+            response = await self.client.post(
                 "/recharge_auctions/launch",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -886,7 +894,7 @@ class CircuitRPCClient:
         else:
             assert bill_coin_name is not None, "Must specify bill to implement when not creating custom conditions"
             print(f"Implementing bill {bill_coin_name} to launch recharge auction coin")
-            bill_response = self.client.post(
+            bill_response = await self.client.post(
                 "/bills/implement",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -900,7 +908,7 @@ class CircuitRPCClient:
             print("Got bill", bill_response.content)
             print("Launching recharge coin")
             implement_bundle = SpendBundle.from_json_dict(bill_response.json())
-            response = self.client.post(
+            response = await self.client.post(
                 "/recharge_auctions/launch",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -1002,7 +1010,7 @@ class CircuitRPCClient:
 
     async def upkeep_treasury_launch(self, SUCCESSOR_LAUNCHER_ID=None, create_conditions=False, bill_coin_name=None):
         if not SUCCESSOR_LAUNCHER_ID:
-            response = self.client.post(
+            response = await self.client.post(
                 "/treasury",
                 json={},
             )
@@ -1014,9 +1022,10 @@ class CircuitRPCClient:
         if create_conditions:
             assert bill_coin_name is None, "Cannot create custom conditions and implement bill at the same time"
             print(
-                f"Generating custom conditions for bill to launch treasury coin with {successor_launcher_id} as successor launcher ID"
+                f"Generating custom conditions for bill to launch treasury coin with {successor_launcher_id} "
+                f"as successor launcher ID"
             )
-            response = self.client.post(
+            response = await self.client.post(
                 "/treasury/launch",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -1031,9 +1040,10 @@ class CircuitRPCClient:
         else:
             assert bill_coin_name is not None, "Must specify bill to implement when not creating custom conditions"
             print(
-                f"Implementing bill {bill_coin_name} to launch treasury coin with {successor_launcher_id} as successor launcher ID"
+                f"Implementing bill {bill_coin_name} to launch treasury coin with {successor_launcher_id} as "
+                f"successor launcher ID"
             )
-            bill_response = self.client.post(
+            bill_response = await self.client.post(
                 "/bills/implement",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -1043,7 +1053,7 @@ class CircuitRPCClient:
             )
             print("Launching treasury coin with successor launcher ID", successor_launcher_id)
             implement_bundle = SpendBundle.from_json_dict(bill_response.json())
-            response = self.client.post(
+            response = await self.client.post(
                 "/treasury/launch",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -1071,7 +1081,7 @@ class CircuitRPCClient:
             seized = None
 
         if coin_name:
-            response = self.client.post(
+            response = await self.client.post(
                 f"/vaults/{coin_name}/",
                 json={
                     "seized": seized,
@@ -1079,7 +1089,7 @@ class CircuitRPCClient:
             )
             return response.json()
 
-        response = self.client.post(
+        response = await self.client.post(
             "/vaults",
             json={
                 "seized": seized,
@@ -1089,7 +1099,7 @@ class CircuitRPCClient:
 
     async def upkeep_vaults_transfer(self, coin_name=None):
         if not coin_name:
-            response = self.client.post(
+            response = await self.client.post(
                 "/vaults",
                 json={
                     "seized": False,
@@ -1100,7 +1110,7 @@ class CircuitRPCClient:
 
         log.info("Transferring Stability Fees from collateral vault %s", coin_name)
 
-        response = self.client.post(
+        response = await self.client.post(
             "/vaults/transfer_stability_fees",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -1120,14 +1130,15 @@ class CircuitRPCClient:
         signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
         await self.wait_for_confirmation(signed_bundle)
         log.info(
-            f"Stability Fees transferred ({response.json()['sf_transferred'] / self.consts['MCAT']:,.3f} BYC) from collateral vault {coin_name}"
+            f"Stability Fees transferred ({response.json()['sf_transferred'] / self.consts['MCAT']:,.3f} BYC) from "
+            f"collateral vault {coin_name}"
         )
         return sig_response
 
     async def upkeep_vaults_liquidate(self, coin_name: str):
         keeper_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
-        response = self.client.post(
+        response = await self.client.post(
             "/vaults/start_auction",
             json={
                 "synthetic_pks": [],
@@ -1149,7 +1160,7 @@ class CircuitRPCClient:
     async def upkeep_vaults_bid(self, coin_name: str, amount: float):
         keeper_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
-        response = self.client.post(
+        response = await self.client.post(
             "/vaults/bid_auction",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -1171,7 +1182,7 @@ class CircuitRPCClient:
         return sig_response
 
     async def upkeep_vaults_recover(self, coin_name: str):
-        response = self.client.post(
+        response = await self.client.post(
             "/vaults/recover_bad_debt",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
@@ -1252,7 +1263,7 @@ class CircuitRPCClient:
             data = await self._make_api_request("POST", "/bills", payload)
             assert len(data) > 0, "No bills found"
             assert len(data) == 1, "More than one bill found. Must specify governance coin name"
-            coin_name = data[0]["name"]
+            coin_name = data["name"]
 
         # Process as transaction
         payload = self._build_transaction_payload({"coin_name": coin_name})
@@ -1277,7 +1288,7 @@ class CircuitRPCClient:
             payload = self._build_base_payload(include_spent_coins=False, empty_only=True)
             data = await self._make_api_request("POST", "/bills", payload)
             assert len(data) > 0, "No governance coin with empty bill found"
-            coin_name = data[0]["name"]
+            coin_name = data["name"]
 
         # Process as transaction
         payload = self._build_transaction_payload(
@@ -1355,10 +1366,8 @@ class CircuitRPCClient:
         payload = self._build_transaction_payload({})
         return await self._process_transaction("/statutes/announce", payload)
 
-    def close(self):
+    async def close(self):
         """Close the HTTP client with proper logging."""
         if hasattr(self, "client"):
-            self.client.close()
+            await self.client.aclose()
             log.info("HTTP client closed")
-        else:
-            log.warning("No HTTP client to close")
