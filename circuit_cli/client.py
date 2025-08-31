@@ -10,10 +10,11 @@ from chia.util.bech32m import encode_puzzle_hash
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
     puzzle_hash_for_synthetic_public_key,
 )
-from chia_rs import PrivateKey, SpendBundle
+from chia_rs import PrivateKey, SpendBundle, Coin
 from httpx import AsyncClient
 
 from circuit_cli.utils import generate_ssks, sign_spends
+from circuit_cli.persistence import DictStore
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +83,8 @@ class CircuitRPCClient:
         self.add_sig_data = add_sig_data
         self.fee_per_cost = fee_per_cost
         self.no_wait_for_confirmation = no_wait_for_tx
+        # Simple persistence store under ~/.circuit/state.json
+        self.store = DictStore()
 
     @property
     def synthetic_pks_hex(self) -> list[str]:
@@ -94,7 +97,7 @@ class CircuitRPCClient:
         endpoint: str,
         json_data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any] | list:
         """
         Make a standardized API request with error handling.
 
@@ -682,9 +685,7 @@ class CircuitRPCClient:
         }
         return await self._make_api_request("POST", "/announcers", payload)
 
-    async def upkeep_announcers_approve(
-        self, coin_name, create_conditions=False, bill_coin_name=None, govern_bundle=None
-    ):
+    async def upkeep_announcers_approve(self, coin_name, create_conditions=False, bill_coin_name=None, label=None):
         if create_conditions:
             assert bill_coin_name is None, "Cannot create custom conditions and implement bill at the same time"
             response = await self.client.post(
@@ -699,7 +700,11 @@ class CircuitRPCClient:
             if response.is_error:
                 print(response.content)
                 response.raise_for_status()
-            return response.json()
+            data = response.json()
+            if label:
+                with self.store.lock:
+                    self.store.set(f"proposals.values.{label}", data["announcements_to_vote_for"])
+            return data
         else:
             assert bill_coin_name is not None, "Must specify bill to implement when not creating custom conditions"
             bill_response = await self.client.post(
@@ -1271,43 +1276,64 @@ class CircuitRPCClient:
 
     async def bills_propose(
         self,
-        INDEX: int = None,
-        VALUE: str = None,
+        index: int = None,
+        value: str = None,
         coin_name: str = None,
         force: bool = False,
         proposal_threshold: int = None,
         veto_interval: int = None,
         implementation_delay: int = None,
         max_delta: int = None,
+        skip_verify: bool = False,
+        label=None,
     ):
-        """Propose a bill using DRY helper methods."""
-        assert INDEX is not None, "Must specify Statute index (between -1 and 42 included)"
+        assert index is not None, "Must specify Statute index (between -1 and 42 included)"
 
         # Get coin name if not provided, using custom logic for empty bills
         if coin_name is None:
             payload = self._build_base_payload(include_spent_coins=False, empty_only=True)
             data = await self._make_api_request("POST", "/bills", payload)
             assert len(data) > 0, "No governance coin with empty bill found"
-            coin_name = data["name"]
+            coin_name = data[0]["name"]
 
+        if value is not None:
+            if value.startswith("<") and value.endswith(">"):
+                # this is a labelled value
+                value_label = value[1:-1]
+                value = self.store.get(f"proposals.values.{value_label}")
+            if value.lower().startswith("0x"):
+                value = value[2:]
         # Process as transaction
         payload = self._build_transaction_payload(
             {
                 "coin_name": coin_name,
-                "statute_index": INDEX,
-                "value": VALUE,
+                "statute_index": index,
+                "value": value,
                 "value_is_program": False,
                 "threshold_amount_to_propose": proposal_threshold,
                 "veto_seconds": veto_interval,
                 "delay_seconds": implementation_delay,
                 "max_delta": max_delta,
                 "force": force,
+                "verify": not skip_verify,
             }
         )
-        return await self._process_transaction("/bills/propose", payload)
+        tx_result = await self._process_transaction("/bills/propose", payload)
+        bundle = SpendBundle.from_json_dict(tx_result["bundle"])
+        new_proposal_coin: Coin
+        for coin in bundle.additions():
+            if coin.parent_coin_info == bytes.fromhex(coin_name):
+                new_proposal_coin = coin
+                break
+        else:
+            raise Exception("New proposal coin not found in returned bundle")
+        if label:
+            log.debug("Storing proposal coin %s with label %s", new_proposal_coin.name(), label)
+            with self.store.lock:
+                self.store.set(f"proposals.propose.coins.{label}", new_proposal_coin.name().hex())
+        return tx_result
 
     async def bills_implement(self, coin_name: str = None, info: bool = False):
-        """Implement a bill using DRY helper methods."""
         coins = []
         if coin_name is None or info:
             payload = self._build_base_payload(include_spent_coins=False, empty_only=False, non_empty_only=True)

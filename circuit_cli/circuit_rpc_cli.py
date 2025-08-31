@@ -63,8 +63,8 @@ async def announcer_fasttrack(rpc_client, PRICE: float = None, launcher_id: str 
     bills = await rpc_client.bills_list()
     bill_name = bills[0]["name"]
     resp = await rpc_client.bills_propose(
-        INDEX=-1,
-        VALUE=voting_anns,
+        index=-1,
+        value=voting_anns,
         coin_name=bill_name,
         force=True,
     )
@@ -187,10 +187,12 @@ async def cli():
         help="Create custom conditions for bill to approve the announcer",
     )
     upkeep_announcers_approve_parser.add_argument(
-        "bill_coin_name",
+        "-b",
+        "--bill-coin-name",
         type=str,
+        required=False,
         default=None,
-        help="Implement previously proposed bill to approve the announcer. This option requires a govern bundle (-g option) and secure solution condition (-s option) to be specified",
+        help="Bill name to implement previously proposed bill to approve the announcer.",
     )
     upkeep_announcers_disapprove_parser = upkeep_announcers_subparsers.add_parser(
         "disapprove",
@@ -584,9 +586,9 @@ async def cli():
 
     ## propose ##
     bills_propose_parser = bills_subparsers.add_parser("propose", help="Propose a new bill")
-    bills_propose_parser.add_argument("INDEX", type=int, help="Statute index. Specify -1 for custom conditions")
+    bills_propose_parser.add_argument("index", type=int, help="Statute index. Specify -1 for custom conditions")
     bills_propose_parser.add_argument(
-        "VALUE",
+        "value",
         nargs="?",
         default=None,
         type=str,
@@ -612,6 +614,7 @@ async def cli():
     bills_propose_parser.add_argument(
         "--max-delta", type=int, default=None, help="Max absolute amount in bps by which Statues value may change"
     )
+    bills_propose_parser.add_argument("-s", "--skip-verify", action="store_true", help="Skip statutes integrity checks")
 
     ## implement ##
     bills_implement_subparser = bills_subparsers.add_parser(
@@ -880,8 +883,6 @@ async def cli():
         # Set default constants so client can still be used for testing
     try:
         kwargs = dict([(k.lower(), v) for k, v in vars(args).items()])
-        if "info" in kwargs.keys():
-            print(f"{args.info=}")
         function_name = f"{args.command}_{args.action}"
         if "subaction" in kwargs.keys():
             function_name += f"_{args.subaction}"
