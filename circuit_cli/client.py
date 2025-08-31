@@ -498,45 +498,51 @@ class CircuitRPCClient:
         payload = self._build_base_payload(human_readable=human_readable)
         return await self._make_api_request("POST", "/savings", payload)
 
-    async def savings_deposit(self, amount: float):
-        """
-        Deposit BYC into the savings vault to earn interest.
 
-        Deposits BYC stablecoin into the savings vault where it will
-        earn interest over time based on the current savings rate.
 
-        Args:
-            amount (float): Amount of BYC to deposit into savings
+    async def savings_deposit(self, AMOUNT: float, INTEREST: float = None, units=False):
+        amount = AMOUNT if units else int(AMOUNT * self.consts["MCAT"])
+        if INTEREST is not None:
+            interest = INTEREST if units else int(INTEREST * self.consts["MCAT"])
+        response = self.client.post(
+            "/savings/deposit",
+            json={
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                "amount": amount,
+                "treasury_withdraw_amount": interest if INTEREST is not None else None,
+                "fee_per_cost": self.fee_per_cost,
+            },
+        )
+        if response.is_error:
+            print(response.content)
+            response.raise_for_status()
+        bundle: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
+        sig_response = await self.sign_and_push(bundle)
+        signed_bundle = SpendBundle.from_json_dict(sig_response["bundle"])
+        await self.wait_for_confirmation(signed_bundle)
+        return sig_response
 
-        Returns:
-            dict: Transaction result with bundle and status information
-
-        Example:
-            result = client.savings_deposit(1000.0)
-            # Deposits 1000 BYC into savings to earn interest
-        """
-        payload = self._build_transaction_payload({"amount": self._convert_amount(amount, "MCAT")})
-        return await self._process_transaction("/savings/deposit", payload)
-
-    async def savings_withdraw(self, amount: float):
-        """
-        Withdraw BYC from the savings vault.
-
-        Withdraws BYC from the savings vault, including both principal
-        and any accrued interest up to the available balance.
-
-        Args:
-            amount (float): Amount of BYC to withdraw from savings
-
-        Returns:
-            dict: Transaction result with bundle and status information
-
-        Example:
-            result = client.savings_withdraw(500.0)
-            # Withdraws 500 BYC from savings including interest
-        """
-        payload = self._build_transaction_payload({"amount": self._convert_amount(amount, "MCAT")})
-        return await self._process_transaction("/savings/withdraw", payload)
+    async def savings_withdraw(self, AMOUNT: float, INTEREST: float = None, units=False):
+        amount = AMOUNT if units else int(AMOUNT * self.consts["MCAT"])
+        if INTEREST is not None:
+            interest = INTEREST if units else int(INTEREST * self.consts["MCAT"])
+        response = self.client.post(
+            "/savings/withdraw",
+            json={
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
+                "amount": amount,
+                "treasury_withdraw_amount": interest if INTEREST is not None else None,
+                "fee_per_cost": self.fee_per_cost,
+            },
+        )
+        if response.is_error:
+            print(response.content)
+            response.raise_for_status()
+        bundle: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
+        sig_response = await self.sign_and_push(bundle)
+        signed_bundle = SpendBundle.from_json_dict(sig_response["bundle"])
+        await self.wait_for_confirmation(signed_bundle)
+        return sig_response
 
     ### ANNOUNCERS ###
     async def announcer_show(self, approved=False, valid=False, penalizable=False, incl_spent=False):

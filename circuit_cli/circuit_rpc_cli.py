@@ -850,12 +850,27 @@ async def cli():
     savings_show_parser = savings_subparsers.add_parser("show", help="Show vault")
 
     ## deposit ##
-    savings_deposit_subparser = savings_subparsers.add_parser("deposit", help="Deposit to vault")
+    savings_deposit_subparser = savings_subparsers.add_parser(
+        "deposit", help="Deposit to vault",
+        description="Deposit BYC to savings vault. By default, all accrued interest is withdrawn from treasury to savings vault on every deposit. To get paid a different amount of interest (incl 0), specify the desired value via INTEREST argument."
+    )
     savings_deposit_subparser.add_argument("AMOUNT", type=float, help="Amount of BYC to deposit")
+    savings_deposit_subparser.add_argument(
+        "INTEREST", nargs="?", type=float, default=None,
+        help="[optional] Amount (in BYC) of accrued interest to withdraw from treasury to savings vault. By default, all accrued interest is withdrawn"
+    )
 
     ## withdraw ##
-    savings_withdraw_subparser = savings_subparsers.add_parser("withdraw", help="Withdraw from vault")
+    savings_withdraw_subparser = savings_subparsers.add_parser(
+        "withdraw", help="Withdraw from vault",
+        description="Withdraw BYC from savings vault. By default, all accrued interest is withdrawn from treasury to savings vault on every withdrawal. To get paid a different amount of interest (incl 0), specify the desired value via INTEREST argument."
+    )
     savings_withdraw_subparser.add_argument("AMOUNT", type=float, help="Amount of BYC to withdraw")
+    savings_withdraw_subparser.add_argument(
+        "INTEREST", nargs="?", type=float, default=None,
+        help="[optional] Amount (in BYC) of accrued interest to withdraw from treasury to savings vault. By default, all accrued interest is withdrawn"
+    )
+
 
     args = parser.parse_args()
     rpc_client = CircuitRPCClient(
