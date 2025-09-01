@@ -2,10 +2,10 @@
 name = "circuit-cli"
 version = "0.1.0"
 description = "CLI tool to manage your Circuit collateral vault, savings and upkeep the protocol/DAO"
-authors = ["Sebastjan Trepca <set@circuitdao.com>"]
+authors = ["trepca <set@circuitdao.com>", "nimcon <nin@circuitdao.com>"]
 readme = "README.md"
 keywords = ["circuit", "chia", "blockchain", "dao", "cli"]
-homepage = "https://github.com/circuitdao/circuit-cli"
+homepage = "https://circuitdao.com"
 repository = "https://github.com/circuitdao/circuit-cli"
 license = "Proprietary"
 classifiers = [
