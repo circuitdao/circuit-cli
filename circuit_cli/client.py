@@ -721,45 +721,51 @@ class CircuitRPCClient:
         payload = self._build_base_payload(human_readable=human_readable)
         return await self._make_api_request("POST", "/savings", payload)
 
-    async def savings_deposit(self, AMOUNT: float, INTEREST: float = None, units=False):
-        amount = AMOUNT if units else int(AMOUNT * self.consts["MCAT"])
-        if INTEREST is not None:
-            interest = INTEREST if units else int(INTEREST * self.consts["MCAT"])
+    async def savings_deposit(self, amount: float, interest: float = None, units=False):
+        amount = amount if units else int(amount * self.consts["MCAT"])
+        if interest is not None:
+            interest = interest if units else int(interest * self.consts["MCAT"])
         response = self.client.post(
             "/savings/deposit",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "amount": amount,
-                "treasury_withdraw_amount": interest if INTEREST is not None else None,
+                "treasury_withdraw_amount": interest,
                 "fee_per_cost": self.fee_per_cost,
             },
         )
         if response.is_error:
             print(response.content)
             response.raise_for_status()
-        bundle: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
+        data = response.json()
+        if "message" in data.keys():
+            return data
+        bundle: SpendBundle = SpendBundle.from_json_dict(data["bundle"])
         sig_response = await self.sign_and_push(bundle)
         signed_bundle = SpendBundle.from_json_dict(sig_response["bundle"])
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
 
-    async def savings_withdraw(self, AMOUNT: float, INTEREST: float = None, units=False):
-        amount = AMOUNT if units else int(AMOUNT * self.consts["MCAT"])
-        if INTEREST is not None:
-            interest = INTEREST if units else int(INTEREST * self.consts["MCAT"])
+    async def savings_withdraw(self, amount: float, interest: float = None, units=False):
+        amount = amount if units else int(amount * self.consts["MCAT"])
+        if interest is not None:
+            interest = interest if units else int(interest * self.consts["MCAT"])
         response = self.client.post(
             "/savings/withdraw",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "amount": amount,
-                "treasury_withdraw_amount": interest if INTEREST is not None else None,
+                "treasury_withdraw_amount": interest,
                 "fee_per_cost": self.fee_per_cost,
             },
         )
         if response.is_error:
             print(response.content)
             response.raise_for_status()
-        bundle: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
+        data = response.json()
+        if "message" in data.keys():
+            return data
+        bundle: SpendBundle = SpendBundle.from_json_dict(data["bundle"])
         sig_response = await self.sign_and_push(bundle)
         signed_bundle = SpendBundle.from_json_dict(sig_response["bundle"])
         await self.wait_for_confirmation(signed_bundle)
