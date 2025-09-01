@@ -35,15 +35,12 @@ else
     elif [ "$2" = "main" ]; then
       export BASE_URL="https://api.circuitdao.com"
       export ADD_SIG_DATA="ccd5bb71183532bff220ba46c268991a3ff07eb358e8255a65c30a2dce0e5fbb" # needed? genesis_challege
-      export FEE_PER_COST=5
     elif [ "$2" = "test" ]; then
       export BASE_URL="https://testnet-api.circuitdao.com"
       export ADD_SIG_DATA="37a90eb5185a9c4439a91ddc98bbadce7b4feba060d50116a067de66bf236615" # testnet11
-      export FEE_PER_COST=7
     elif [ "$2" = "sim" ]; then
       export BASE_URL="http://localhost:8000"
       export ADD_SIG_DATA="" # leave empty
-      export FEE_PER_COST=7
     else
       echo "Unkown environment $2. Use -h for help"
       return

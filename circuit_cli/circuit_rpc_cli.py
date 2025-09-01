@@ -1,10 +1,11 @@
 import argparse
 import asyncio
 import os
+import sys
+
 import httpx
 import json
 
-from chia_rs import SpendBundle
 
 from circuit_cli.client import CircuitRPCClient
 from circuit_cli.json_formatter import format_circuit_response
@@ -13,83 +14,23 @@ import logging
 log = logging.getLogger(__name__)
 
 
-async def get_announcer_name(rpc_client, launcher_id: str = None):
-    data = await rpc_client.announcer_show()
-    if not launcher_id:
-        return data[0]["launcher_id"], data[0]["name"]
-    for announcer in data:
-        if announcer["launcher_id"] == launcher_id:
-            return launcher_id, announcer["name"]
-    raise ValueError(f"Announcer with launcher_id {launcher_id.hex()} not found")
-
-
-async def announcer_fasttrack(rpc_client, PRICE: float = None, launcher_id: str = None):
-    print(f"Fasttracking announcer with price {PRICE} XCH/USD")
-    MOJOS = rpc_client.consts["MOJOS"]
-    if not launcher_id:
-        print("Launching announcer...")
-        assert PRICE, "Must specify price when launching announcer via fasttrack"
-        resp = await rpc_client.announcer_launch(price=PRICE)
-        print("Waiting for time to pass to launch announcer (farm blocks if in simulator)...")
-        bundle = SpendBundle.from_json_dict(resp["bundle"])
-        await rpc_client.wait_for_confirmation(bundle)
-        launcher_id = bundle.coin_spends[-1].coin.name().hex()
-        print("Announcer launched.")
-    launcher_id, coin_name = await get_announcer_name(rpc_client, launcher_id)
-    print(f"  Launcher ID: {launcher_id}")
-    print(f"  Coin name:   {coin_name}")
-    statutes = await rpc_client.statutes_list(full=True)
-    # find min deposit amount
-    min_deposit = int(statutes["implemented_statutes"]["ANNOUNCER_MINIMUM_DEPOSIT"])
-    max_ttl = int(statutes["implemented_statutes"]["ANNOUNCER_MAXIMUM_VALUE_TTL"])
-    print("Configuring announcer with:")
-    print(f"  deposit={min_deposit / MOJOS} XCH")
-    print(f"  min_deposit={min_deposit / MOJOS} XCH")
-    print(f"  ttl={max_ttl - 10} seconds")
-    resp = await rpc_client.announcer_configure(
-        coin_name, deposit=min_deposit / MOJOS, min_deposit=min_deposit / MOJOS, price=PRICE, ttl=max_ttl - 10
-    )
-    bundle = SpendBundle.from_json_dict(resp["bundle"])
-    await rpc_client.wait_for_confirmation(bundle)
-    print("Announcer configured.")
-    # approve announcer
-    print("Approving announcer...")
-    launcher_id, announcer_coin_name = await get_announcer_name(rpc_client, launcher_id)
-    vote_data = await rpc_client.upkeep_announcers_approve(
-        announcer_coin_name,
-        create_conditions=True,
-    )
-    voting_anns = vote_data["announcements_to_vote_for"]
-    bills = await rpc_client.bills_list()
-    bill_name = bills[0]["name"]
-    resp = await rpc_client.bills_propose(
-        index=-1,
-        value=voting_anns,
-        coin_name=bill_name,
-        force=True,
-    )
-    bundle = SpendBundle.from_json_dict(resp["bundle"])
-    await rpc_client.wait_for_confirmation(bundle)
-    print("Bill to approve announcer proposed.")
-    bills = await rpc_client.bills_list()
-    bill_coin_name = bills[0]["name"]
-    print("Waiting for time to pass to implement bill (farm blocks if in simulator)...")
-    await rpc_client.wait_for_confirmation(blocks=1)
-    print("Implementation delay has passsed. Implementing bill...")
-    launcher_id, coin_name = await get_announcer_name(rpc_client, launcher_id)
-    # implementing announcer approval
-    resp = await rpc_client.upkeep_announcers_approve(
-        coin_name,
-        bill_coin_name=bill_coin_name,
-        # govern_bundle=json.dumps(govern_bundle),
-    )
-    print("Bill implemented. Announcer approved.")
-    return resp
+def fee_per_cost_type(value: str):
+    """Custom argparse type for fee_per_cost argument."""
+    value_lower = value.lower()
+    if value_lower in ("fast", "medium"):
+        return value_lower
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"'{value}' is not a valid fee per cost. Must be 'fast', 'medium', or an integer."
+        )
 
 
 async def cli():
     parser = argparse.ArgumentParser(description="Circuit CLI tool")
     subparsers = parser.add_subparsers(dest="command")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument(
         "--base-url",
         type=str,
@@ -105,14 +46,21 @@ async def cli():
     parser.add_argument(
         "--fee-per-cost",
         "-fpc",
-        type=str,
-        default=int(os.environ.get("FEE_PER_COST", 0)),
-        help="Add transaction fee, set as fee per cost.",
+        type=fee_per_cost_type,
+        default=os.environ.get("FEE_PER_COST", "fast"),
+        help="Set transaction fee: 'fast', 'medium' or number of mojos per cost. "
+        "Fast mode aims to get transactions confirmed in next 1-2 blocks, medium up to 5 blocks.",
     )
     parser.add_argument(
         "--private-key", "-p", type=str, default=os.environ.get("PRIVATE_KEY"), help="Private key for your coins"
     )
     parser.add_argument("-j", "--json", action="store_true", help="Return JSON instead of human readable output")
+    parser.add_argument(
+        "--progress",
+        choices=["off", "text", "json"],
+        default=os.environ.get("CIRCUIT_CLI_PROGRESS", "text"),
+        help="Stream progress while waiting for confirmations: 'off' (default), 'text' for human output, 'json' for JSONL events",
+    )
 
     ### UPKEEP ###
     upkeep_parser = subparsers.add_parser("upkeep", help="Commands to upkeep protocol and RPC server")
@@ -306,7 +254,6 @@ async def cli():
     upkeep_registry_reward_parser.add_argument(
         "-t",
         "--target-puzzle-hash",
-        metavar="PUZZLE_HASH",
         type=str,
         default=None,
         help="Puzzle hash to which excess CRT Rewards not allocated to any announcer will be be paid. Default is first synthetic derived key of user's wallet",
@@ -360,7 +307,7 @@ async def cli():
     )
     upkeep_recharge_bid_parser.add_argument(
         "-crt",
-        metavar="AMOUNT",
+        metavar="amount",
         nargs="?",
         type=float,
         default=None,
@@ -405,7 +352,7 @@ async def cli():
     )
     upkeep_surplus_bid_parser.add_argument("coin_name", type=str, help="Name of surplus auction coin")
     upkeep_surplus_bid_parser.add_argument(
-        "AMOUNT", nargs="?", type=float, default=None, help="Amount of CRT to bid. Optional when -i option is set."
+        "amount", nargs="?", type=float, default=None, help="Amount of CRT to bid. Optional when -i option is set."
     )
     upkeep_surplus_bid_parser.add_argument(
         "-t",
@@ -508,13 +455,23 @@ async def cli():
         "bid", help="Bid in a liquidation auction", description="Submits a bid in a liquidation auction."
     )
     upkeep_vaults_bid_parser.add_argument("coin_name", type=str, help="Name of vault in liquidation")
-    upkeep_vaults_bid_parser.add_argument("AMOUNT", type=float, help="Amount of BYC to bid")
+    upkeep_vaults_bid_parser.add_argument("amount", type=float, help="Amount of BYC to bid")
     # upkeep_vaults_auction_parser.add_argument("-s", "--start", action="store_true", help="Start or restart a liquidation auction")
     # upkeep_vaults_auction_parser.add_argument("-b", "--bid-amount", type=int, help="Submit a bid in a liquidation auction. Specify bid amount in mBYC")
     upkeep_vaults_recover_parser = upkeep_vaults_subparsers.add_parser(
         "recover", help="Recover bad debt", description="Recovers bad debt from a collateral vault."
     )
     upkeep_vaults_recover_parser.add_argument("coin_name", type=str, help="Vault ID")
+
+    # cli / self
+    self_parser = subparsers.add_parser("self", help="Commands to manage the CLI itself")
+    self_subparsers = self_parser.add_subparsers(dest="action")
+
+    ## protocol info ##
+    self_subparsers.add_parser(
+        "unlock",
+        help="Release store lock",
+    )
 
     ### BILLS ###
     bills_parser = subparsers.add_parser("bills", help="Command to manage bills and governance")
@@ -615,6 +572,9 @@ async def cli():
         "--max-delta", type=int, default=None, help="Max absolute amount in bps by which Statues value may change"
     )
     bills_propose_parser.add_argument("-s", "--skip-verify", action="store_true", help="Skip statutes integrity checks")
+    bills_propose_parser.add_argument(
+        "-l", "--label", type=str, help="Tag this coin with a label that can be used to identify it in other operations"
+    )
 
     ## implement ##
     bills_implement_subparser = bills_subparsers.add_parser(
@@ -673,7 +633,7 @@ async def cli():
 
     ## launch ##
     announcer_launch_parser = announcer_subparsers.add_parser("launch", help="Launch an announcer")
-    announcer_launch_parser.add_argument("PRICE", type=float, help="Initial announcer price in USD per XCH")
+    announcer_launch_parser.add_argument("price", type=float, help="Initial announcer price in USD per XCH")
 
     ## fasttrack (launch + approve) ##
     # This function is intended for test purposes and will not work in practice
@@ -683,7 +643,7 @@ async def cli():
         description="Launches and approves or approves an announcer. Requires a governance coin with empty bill to be available.",
     )
     announcer_fasttrack_parser.add_argument(
-        "PRICE",
+        "price",
         nargs="?",
         type=float,
         default=None,
@@ -716,7 +676,7 @@ async def cli():
         help="Update announcer price",
         description="Updates the announcer price. The puzzle automatically updates the expiry timestamp.",
     )
-    announcer_update_parser.add_argument("PRICE", type=float, help="New announcer price in USD per XCH")
+    announcer_update_parser.add_argument("price", type=str, help="New announcer price in USD per XCH")
     announcer_update_parser.add_argument(
         "coin_name",
         nargs="?",
@@ -744,13 +704,13 @@ async def cli():
     announcer_configure_parser.add_argument(
         "-a", "--make-approvable", action="store_true", help="Configure announcer so that is becomes approvable"
     )
-    announcer_configure_parser.add_argument("--deposit", type=float, help="New deposit amount in XCH")
-    announcer_configure_parser.add_argument("--min-deposit", type=float, help="New minimum deposit amount in XCH")
+    announcer_configure_parser.add_argument("--deposit", type=str, help="New deposit amount in XCH")
+    announcer_configure_parser.add_argument("--min-deposit", type=str, help="New minimum deposit amount in XCH")
     announcer_configure_parser.add_argument("--inner-puzzle-hash", type=int, help="New inner puzzle hash (re-key)")
     announcer_configure_parser.add_argument(
         "--price",
         type=float,
-        help="New announcer price in USD per XCH. If only updating price, it's more effcient to use 'update' operation",
+        help="New announcer price in USD per XCH. If only updating price, it's more efficient to use 'update' operation",
     )
     announcer_configure_parser.add_argument("--ttl", type=int, help="New price time to live in seconds")
     announcer_configure_parser.add_argument("-d", "--deactivate", action="store_true", help="Deactivate announcer")
@@ -807,10 +767,7 @@ async def cli():
     ## list ##
     statutes_list_subparser = statutes_subparsers.add_parser("list", help="List Statutes")
     statutes_list_subparser.add_argument(
-        "-e", "--exclude-statutes", action="store_true", help="Show Statutes coin info excluding Statutes"
-    )
-    statutes_list_subparser.add_argument(
-        "-f", "--full-statutes", action="store_true", help="Show Statutes incl constraints and additional info"
+        "-f", "--full", action="store_true", help="Show Statutes incl constraints and additional info"
     )
 
     ## update price ##
@@ -828,19 +785,19 @@ async def cli():
 
     ## deposit ##
     vault_deposit_subparser = vault_subparsers.add_parser("deposit", help="Deposit to vault")
-    vault_deposit_subparser.add_argument("AMOUNT", type=float, help="Amount of XCH to deposit")
+    vault_deposit_subparser.add_argument("amount", type=float, help="Amount of XCH to deposit")
 
     ## withdraw ##
     vault_withdraw_subparser = vault_subparsers.add_parser("withdraw", help="Withdraw from vault")
-    vault_withdraw_subparser.add_argument("AMOUNT", type=float, help="Amount of XCH to withdraw")
+    vault_withdraw_subparser.add_argument("amount", type=float, help="Amount of XCH to withdraw")
 
     ## borrow ##
     vault_borrow_subparser = vault_subparsers.add_parser("borrow", help="Borrow from vault")
-    vault_borrow_subparser.add_argument("AMOUNT", type=float, help="Amount of BYC to borrow")
+    vault_borrow_subparser.add_argument("amount", type=float, help="Amount of BYC to borrow")
 
     ## repay ##
     vault_repay_subparser = vault_subparsers.add_parser("repay", help="Repay to vault")
-    vault_repay_subparser.add_argument("AMOUNT", type=float, help="Amount of BYC to repay")
+    vault_repay_subparser.add_argument("amount", type=float, help="Amount of BYC to repay")
 
     ### SAVINGS VAULT ###
     savings_parser = subparsers.add_parser("savings", help="Manage a savings vault")
@@ -851,28 +808,85 @@ async def cli():
 
     ## deposit ##
     savings_deposit_subparser = savings_subparsers.add_parser(
-        "deposit", help="Deposit to vault",
-        description="Deposit BYC to savings vault. By default, all accrued interest is withdrawn from treasury to savings vault on every deposit. To get paid a different amount of interest (incl 0), specify the desired value via INTEREST argument."
+        "deposit",
+        help="Deposit to vault",
+        description="Deposit BYC to savings vault. By default, all accrued interest is withdrawn from treasury to savings vault on every deposit. To get paid a different amount of interest (incl 0), specify the desired value via INTEREST argument.",
     )
-    savings_deposit_subparser.add_argument("AMOUNT", type=float, help="Amount of BYC to deposit")
+    savings_deposit_subparser.add_argument("amount", type=float, help="Amount of BYC to deposit")
     savings_deposit_subparser.add_argument(
-        "INTEREST", nargs="?", type=float, default=None,
-        help="[optional] Amount (in BYC) of accrued interest to withdraw from treasury to savings vault. By default, all accrued interest is withdrawn"
+        "INTEREST",
+        nargs="?",
+        type=float,
+        default=None,
+        help="[optional] Amount (in BYC) of accrued interest to withdraw from treasury to savings vault. By default, all accrued interest is withdrawn",
     )
 
     ## withdraw ##
     savings_withdraw_subparser = savings_subparsers.add_parser(
-        "withdraw", help="Withdraw from vault",
-        description="Withdraw BYC from savings vault. By default, all accrued interest is withdrawn from treasury to savings vault on every withdrawal. To get paid a different amount of interest (incl 0), specify the desired value via INTEREST argument."
+        "withdraw",
+        help="Withdraw from vault",
+        description="Withdraw BYC from savings vault. By default, all accrued interest is withdrawn from treasury to savings vault on every withdrawal. To get paid a different amount of interest (incl 0), specify the desired value via INTEREST argument.",
     )
-    savings_withdraw_subparser.add_argument("AMOUNT", type=float, help="Amount of BYC to withdraw")
+    savings_withdraw_subparser.add_argument("amount", type=float, help="Amount of BYC to withdraw")
     savings_withdraw_subparser.add_argument(
-        "INTEREST", nargs="?", type=float, default=None,
-        help="[optional] Amount (in BYC) of accrued interest to withdraw from treasury to savings vault. By default, all accrued interest is withdrawn"
+        "INTEREST",
+        nargs="?",
+        type=float,
+        default=None,
+        help="[optional] Amount (in BYC) of accrued interest to withdraw from treasury to savings vault. By default, all accrued interest is withdrawn",
     )
-
 
     args = parser.parse_args()
+    # set log level based on verbosity
+    if args.verbose:
+        log_level = logging.DEBUG
+    else:
+        log_level = logging.WARNING
+    # Configure logging based on verbosity with improved formatting
+    root_logger = logging.getLogger()
+    # Clear existing handlers to avoid duplicates or prior configs
+    root_logger.handlers.clear()
+    root_logger.setLevel(log_level)
+
+    # Stream handler with format depending on verbosity
+    handler = logging.StreamHandler()
+    if args.verbose:
+        formatter = logging.Formatter(
+            fmt="%(asctime)s | %(levelname).1s | %(name)s:%(lineno)d - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    else:
+        formatter = logging.Formatter(fmt="%(levelname)s: %(message)s")
+    handler.setFormatter(formatter)
+    handler.setLevel(log_level)
+    root_logger.addHandler(handler)
+
+    # Tame noisy third-party loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+    kwargs = dict([(k.lower(), v) for k, v in vars(args).items()])
+    function_name = f"{args.command}_{args.action}"
+    try:
+        # run commands method dynamically based on the parser command
+        # Show immediate feedback in text mode while contacting the server
+        if not args.json:
+            fee_mode = getattr(args, "fee_per_cost", None)
+            fee_mode_str = str(fee_mode) if fee_mode is not None else "default"
+            no_wait = bool(getattr(args, "no_wait", False))
+            progress_mode = getattr(args, "progress", "text")
+            base = getattr(args, "base_url", None)
+            # First line: contacting + endpoint
+            sys.stderr.write(f"⏳ Contacting server at {base}...\n")
+            # Second line: show command and key options
+            sys.stderr.write(
+                f"↳ command: {function_name} | fee_per_cost: {fee_mode_str} | no_wait: {no_wait} | progress: {progress_mode}\n"
+            )
+            sys.stderr.flush()
+    except AssertionError as ae:
+        # return error message with status
+        result = {"error": str(ae)}
+
     rpc_client = CircuitRPCClient(
         base_url=args.base_url,
         private_key=args.private_key,
@@ -881,13 +895,40 @@ async def cli():
         no_wait_for_tx=args.no_wait,
     )
 
+    # In text mode, show which HTTP endpoints are being used
+    try:
+        rpc_client.show_endpoints = not args.json
+    except AttributeError:
+        pass
+
+    # Set progress handler if requested
+    if args.progress != "off":
+        if args.progress == "json":
+            from circuit_cli.progress import make_json_progress_handler
+
+            rpc_client.progress_handler = make_json_progress_handler()
+        else:
+            from circuit_cli.progress import make_text_progress_handler
+
+            rpc_client.progress_handler = make_text_progress_handler()
+    await rpc_client.set_fee_per_cost()
     # Load protocol constants with improved error handling
     try:
+        # Optional: trace endpoint being used in text mode
+        try:
+            if getattr(rpc_client, "show_endpoints", False):
+                import sys as _sys
+
+                base = getattr(rpc_client, "base_url", "")
+                _sys.stderr.write(f"→ HTTP GET {base}/protocol/constants\n")
+                _sys.stderr.flush()
+        except Exception:
+            pass
         response = await rpc_client.client.get("/protocol/constants")
         response.raise_for_status()
         data = response.json()
         rpc_client.consts = {
-            "PRICE_PRECISION": 10 ** data["xch_usd_price_decimals"],
+            "price_PRECISION": 10 ** data["xch_usd_price_decimals"],
             "MOJOS": data["mojos_per_xch"],
             "MCAT": 10 ** data["cat_decimals"],
         }
@@ -897,8 +938,6 @@ async def cli():
         log.warning("Using default constants - some functionality may be limited")
         # Set default constants so client can still be used for testing
     try:
-        kwargs = dict([(k.lower(), v) for k, v in vars(args).items()])
-        function_name = f"{args.command}_{args.action}"
         if "subaction" in kwargs.keys():
             function_name += f"_{args.subaction}"
         del kwargs["command"]
@@ -910,18 +949,10 @@ async def cli():
         del kwargs["fee_per_cost"]
         del kwargs["json"]
         del kwargs["no_wait"]
-        if args.command == "announcer" and args.action == "fasttrack":
-            # special case for fasttrack
-            result = await announcer_fasttrack(rpc_client, **kwargs)
-        else:
-            log.info(f"Calling {function_name} with {kwargs}")
-            try:
-                # run commands method dynamically based on the parser command
-                result = await getattr(rpc_client, f"{function_name}")(**kwargs)
-            except AssertionError as ae:
-                # return error message with status
-                result = {"error": str(ae)}
-
+        del kwargs["verbose"]
+        del kwargs["progress"]
+        log.info(f"Calling {function_name} with {kwargs}")
+        result = await getattr(rpc_client, f"{function_name}")(**kwargs)
         if args.json:
             print(json.dumps(result))
         else:

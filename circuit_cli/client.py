@@ -20,13 +20,27 @@ log = logging.getLogger(__name__)
 
 
 def setup_console_logging():
-    """Setup console-friendly logging for CLI usage."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
+    """Setup console-friendly logging for CLI usage.
+
+    This function is safe to call multiple times and will NOT override
+    an existing logging configuration (e.g., configured by the CLI based
+    on --verbose). If no handlers are configured yet, it applies a sane
+    default suitable for library usage.
+    """
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        # Respect existing configuration set by the CLI.
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("circuit_cli").setLevel(root_logger.level or logging.INFO)
+        return
+
+    # Fallback default (library context). Keep it simple and avoid duplicate handlers.
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter(fmt="%(levelname)s: %(message)s")
+    handler.setFormatter(formatter)
+    root_logger.addHandler(handler)
+    root_logger.setLevel(logging.INFO)
+
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("circuit_cli").setLevel(logging.INFO)
 
@@ -40,17 +54,53 @@ class APIError(Exception):
 
 
 class CircuitRPCClient:
-    # TODO: add support for estimated fees for tx to be included in next block
+    """High-level asynchronous client for interacting with the Circuit RPC API.
+
+    This client wraps HTTP requests to the Circuit API, handles spend bundle
+    signing and submission, and provides convenience helpers for common
+    workflows used by the CLI. It is designed for programmatic use as well as
+    being driven by the circuit_cli entrypoints.
+
+    Key features:
+    - Manages a set of synthetic public/private keys derived from a master key.
+    - Converts human-friendly amounts to on-chain units (mojos, MCAT, price units).
+    - Standardizes payload construction and error handling.
+    - Signs SpendBundles locally and submits them to the RPC service.
+    - Optionally waits for transaction confirmation and can emit progress events.
+
+    Notes:
+    - Most methods correspond 1:1 with RPC endpoints and either fetch state
+      or produce a SpendBundle to be signed and pushed.
+    - Set "progress_handler" to a callable (sync or async) to receive progress
+      updates during long-running operations like confirmations.
+    - Use "set_fee_per_cost" to resolve dynamic fee presets (e.g. "fast").
+    """
+
     def __init__(
         self,
         base_url: str,
         private_key: str,
         add_sig_data: str = None,
-        fee_per_cost: int = 0,
+        fee_per_cost: int | str = "fast",
         client: Optional[AsyncClient] = None,
         key_count: int = 500,
         no_wait_for_tx: bool = False,
     ):
+        """Create a CircuitRPCClient.
+
+        Args:
+            base_url: Base URL of the Circuit API service.
+            private_key: Hex-encoded master private key for deriving synthetic keys.
+            add_sig_data: Optional additional domain-separation string added to signatures.
+            fee_per_cost: Either a numeric fee-per-cost value or a preset name (e.g. "fast", "medium").
+            client: Optional pre-configured httpx.AsyncClient to use instead of creating a new one.
+            key_count: Number of synthetic keys to derive from the master key.
+            no_wait_for_tx: If True, skip waiting for confirmation after submitting transactions.
+
+        Notes:
+            - If no private_key is provided, operations requiring signatures will fail.
+            - Call set_fee_per_cost() before submitting transactions when using presets.
+        """
         # Setup console-friendly logging
         setup_console_logging()
 
@@ -68,9 +118,11 @@ class CircuitRPCClient:
         self.synthetic_public_keys = synthetic_public_keys
         if private_key:
             log.info("Wallet first 5 addresses:")
+            log.info("Puzzle hash: %s", puzzle_hash_for_synthetic_public_key(synthetic_public_keys[0]))
             log.info(
                 [encode_puzzle_hash(puzzle_hash_for_synthetic_public_key(x), "txch") for x in synthetic_public_keys[:5]]
             )
+
         self.consts = {
             "PRICE_PRECISION": 1000000,  # Default 6 decimals
             "MOJOS": 1000000000000,  # Default XCH to mojo conversion
@@ -81,10 +133,45 @@ class CircuitRPCClient:
         self.client = client if client is not None else httpx.AsyncClient(base_url=base_url, timeout=120)
         log.info(f"Using add_sig_data={add_sig_data}")
         self.add_sig_data = add_sig_data
-        self.fee_per_cost = fee_per_cost
+        self._fee_per_cost = fee_per_cost
+        self.fee_per_cost: float | None = None
         self.no_wait_for_confirmation = no_wait_for_tx
         # Simple persistence store under ~/.circuit/state.json
         self.store = DictStore()
+        # Optional progress handler for streaming progress events
+        # It can be a sync or async callable accepting a single dict argument
+        self.progress_handler = None
+        # When True, print each HTTP endpoint used to stderr (human-friendly tracing)
+        self.show_endpoints: bool = False
+
+    async def _emit_progress(self, event: Dict[str, Any]):
+        """Emit a progress event to the configured handler if set."""
+        handler = self.progress_handler
+        if handler is None:
+            return
+        try:
+            if asyncio.iscoroutinefunction(handler):
+                await handler(event)
+            else:
+                handler(event)
+        except Exception as e:
+            log.debug(f"Progress handler raised exception: {e}")
+
+    async def set_fee_per_cost(self) -> int:
+        """Resolve and set fee_per_cost based on preset or explicit value.
+
+        Returns:
+            The resolved fee_per_cost value as an integer/float stored on self.fee_per_cost.
+        """
+        if self._fee_per_cost is None:
+            self.fee_per_cost = 0
+        elif self._fee_per_cost in ("fast", "medium"):
+            response_data = await self._make_api_request("POST", "/statutes", {"full": False})
+            fee_per_costs = response_data.get("fee_per_costs")
+            self.fee_per_cost = fee_per_costs.get(self._fee_per_cost)
+        else:
+            self.fee_per_cost = self._fee_per_cost
+        log.info("Set fee_per_cost to: %s", self.fee_per_cost)
 
     @property
     def synthetic_pks_hex(self) -> list[str]:
@@ -98,23 +185,33 @@ class CircuitRPCClient:
         json_data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> dict[str, Any] | list:
-        """
-        Make a standardized API request with error handling.
+        """Make a standardized API request with error handling.
 
         Args:
-            method: HTTP method (GET, POST)
-            endpoint: API endpoint
-            json_data: JSON payload for POST requests
-            params: Query parameters for GET requests
+            method: HTTP method (e.g., "GET", "POST").
+            endpoint: API endpoint path, starting with "/".
+            json_data: Optional JSON body for POST requests.
+            params: Optional query parameters for GET requests.
 
         Returns:
-            Response JSON data
+            Parsed JSON response as a dict or list.
 
         Raises:
-            APIError: If the request fails
+            APIError: If the request fails or a network error occurs.
+            ValueError: If an unsupported HTTP method is used.
         """
         try:
             log.info(f"Making request to {method} {endpoint} with params {params} and json_data {json_data}")
+            # Optional human-friendly endpoint trace in text mode
+            if getattr(self, "show_endpoints", False):
+                try:
+                    import sys as _sys
+
+                    base = getattr(self, "base_url", "")
+                    _sys.stderr.write(f"→ HTTP {method.upper()} {base}{endpoint}\n")
+                    _sys.stderr.flush()
+                except Exception:
+                    pass
             if method.upper() == "GET":
                 response = await self.client.get(endpoint, params=params)
             elif method.upper() == "POST":
@@ -155,7 +252,11 @@ class CircuitRPCClient:
         return payload
 
     def _build_transaction_payload(self, endpoint_specific_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Build payload for transaction endpoints."""
+        """Build payload for transaction endpoints.
+
+        The resulting payload includes synthetic public keys and the resolved
+        fee_per_cost value, merged with endpoint-specific fields provided.
+        """
         base_payload = {
             "synthetic_pks": self.synthetic_pks_hex,
             "fee_per_cost": self.fee_per_cost,
@@ -164,7 +265,18 @@ class CircuitRPCClient:
         return base_payload
 
     def _convert_amount(self, amount: float, currency_type: str = "MOJOS") -> int:
-        """Convert amount to appropriate units."""
+        """Convert a human-friendly amount to on-chain units.
+
+        Args:
+            amount: The decimal amount in human-friendly units.
+            currency_type: Unit type to convert to. One of: "MOJOS", "MCAT", "PRICE".
+
+        Returns:
+            Integer number of base units according to the selected currency_type.
+
+        Raises:
+            ValueError: If an unknown currency_type is provided.
+        """
         if currency_type == "MOJOS":
             return floor(amount * self.consts["MOJOS"])
         elif currency_type == "MCAT":
@@ -196,7 +308,7 @@ class CircuitRPCClient:
         bundle_data = response_data.get("bundle")
         bundle = None
         if bundle_data:
-            bundle = SpendBundle.from_json_dict(bundle_data["bundle"])
+            bundle = SpendBundle.from_json_dict(bundle_data)
         elif response_data.get("coin_spends"):
             bundle = SpendBundle.from_json_dict(response_data)
         if not bundle:
@@ -212,7 +324,9 @@ class CircuitRPCClient:
 
         return sig_response
 
-    async def _get_coin_name_if_needed(self, coin_name: Optional[str], endpoint: str, error_message: str = None) -> str:
+    async def _get_coin_name_if_needed(
+        self, coin_name: Optional[str], endpoint: str, error_message: str = None, payload_extras=None
+    ) -> str:
         """
         Helper method to get coin_name if not provided by querying the endpoint.
 
@@ -229,37 +343,142 @@ class CircuitRPCClient:
 
         # Query the endpoint to get available coins
         payload = self._build_base_payload()
+        if payload_extras is not None:
+            payload.update(payload_extras)
         data = await self._make_api_request("POST", endpoint, payload)
-
         base_error = error_message or "No coin found"
         assert len(data) > 0, base_error
         assert len(data) == 1, "More than one coin found. Must provide coin_name"
-        return data["name"]
+        return data[0]["name"]
 
-    async def wait_for_confirmation(self, bundle: SpendBundle = None, blocks=None):
+    async def wait_for_confirmation(self, bundle: SpendBundle = None, blocks=None, stream: bool = False):
+        """Wait until a transaction is confirmed or a number of blocks elapse.
+
+        Args:
+            bundle: Optional SpendBundle. If provided, waits for this transaction ID.
+            blocks: Optional block count to wait for; if None, uses server defaults.
+            stream: If True, yields progress events via progress_handler while waiting.
+
+        Returns:
+            A dict with receipt information if available or final status booleans.
+
+        Notes:
+            - When stream=True and bundle is provided, this becomes an async generator
+              that yields progress events dicts until completion.
+            - Otherwise, it returns True when done (backward compatible behavior).
+        """
         if self.no_wait_for_confirmation:
-            return True
+            if stream:
+                # stream a single completion event for consistency
+                async def _gen():
+                    ev = {"event": "skipped", "reason": "no_wait_for_confirmation", "done": True}
+                    await self._emit_progress(ev)
+                    yield ev
+
+                return _gen()
+            else:
+                await self._emit_progress({"event": "skipped", "reason": "no_wait_for_confirmation", "done": True})
+                return True
         if bundle is not None and isinstance(bundle, SpendBundle):
-            while True:
-                response = await self.client.post("/transactions/status", json={"bundle": bundle.to_json_dict()})
-                if response.status_code != 200:
-                    print(response.content)
-                    response.raise_for_status()
-                data = response.json()
-                if data["status"] == "confirmed":
-                    log.info("Transaction confirmed. ID %s", bundle.name().hex())
-                    return True
-                elif data["status"] == "failed":
-                    raise ValueError(f"Transaction failed. ID {bundle.name().hex()}")
-                log.info(f"Still waiting for confirmation of transaction ID {bundle.name().hex()}")
-                await asyncio.sleep(5)
+            tx_id = bundle.name().hex()
+
+            async def _wait_gen():
+                attempt = 0
+                while True:
+                    attempt += 1
+                    if getattr(self, "show_endpoints", False):
+                        try:
+                            import sys as _sys
+
+                            base = getattr(self, "base_url", "")
+                            _sys.stderr.write(f"→ HTTP POST {base}/transactions/status\n")
+                            _sys.stderr.flush()
+                        except Exception:
+                            pass
+                    response = await self.client.post("/transactions/status", json={"bundle": bundle.to_json_dict()})
+                    if response.status_code != 200:
+                        content = None
+                        try:
+                            content = response.json()
+                        except Exception:
+                            content = response.text
+                        # Yield an error event and raise to stop
+                        ev = {
+                            "event": "error",
+                            "attempt": attempt,
+                            "status_code": response.status_code,
+                            "content": content,
+                            "tx_id": tx_id,
+                        }
+                        await self._emit_progress(ev)
+                        yield ev
+                        response.raise_for_status()
+                    data = response.json()
+                    status = data.get("status")
+                    # Include any extra fields to help the UI
+                    ev = {"event": "poll", "attempt": attempt, "status": status, "tx_id": tx_id}
+                    await self._emit_progress(ev)
+                    yield ev
+                    if status == "confirmed":
+                        log.info("Transaction confirmed. ID %s", tx_id)
+                        evc = {"event": "confirmed", "tx_id": tx_id, "done": True}
+                        await self._emit_progress(evc)
+                        yield evc
+                        return
+                    elif status == "failed":
+                        evf = {"event": "failed", "tx_id": tx_id, "done": True}
+                        await self._emit_progress(evf)
+                        yield evf
+                        raise ValueError(f"Transaction failed. ID {tx_id}")
+                    log.info(f"Still waiting for confirmation of transaction ID {tx_id}")
+                    await asyncio.sleep(5)
+
+            if stream:
+                return _wait_gen()
+            else:
+                # consume generator until it completes, returning boolean
+                async for ev in _wait_gen():
+                    if ev.get("event") in ("confirmed", "failed"):
+                        # confirmed already returns before, failed raises; this is for completeness
+                        pass
+                return True
         elif blocks is not None:
-            await asyncio.sleep(blocks * 55)
-            return True
+            if stream:
+
+                async def _blocks_gen():
+                    # simulate block waiting progress events
+                    total = int(blocks)
+                    for i in range(total):
+                        evs = {"event": "sleep", "remaining_blocks": total - i, "tx_id": None}
+                        await self._emit_progress(evs)
+                        yield evs
+                        await asyncio.sleep(55)
+                    evd = {"event": "done", "done": True}
+                    await self._emit_progress(evd)
+                    yield evd
+
+                return _blocks_gen()
+            else:
+                # Emit a single done event after sleeping for compatibility
+                await asyncio.sleep(blocks * 55)
+                await self._emit_progress({"event": "done", "done": True})
+                return True
         else:
             raise ValueError("Either bundle or number of blocks must be provided")
 
     async def sign_and_push(self, bundle: SpendBundle, error_handling_info: dict = None):
+        """Sign a SpendBundle locally and push it to the RPC service.
+
+        Args:
+            bundle: The unsigned or partially signed SpendBundle to sign.
+            error_handling_info: Optional dict with server-specific error handling hints.
+
+        Returns:
+            The server response JSON as a dict, typically including the signed bundle.
+
+        Raises:
+            APIError: If the push fails (non-2xx response).
+        """
         signed_bundle = await sign_spends(
             bundle.coin_spends,
             self.synthetic_secret_keys,
@@ -275,7 +494,11 @@ class CircuitRPCClient:
                 "error_handling_info": error_handling_info,
             },
         )
-        response.raise_for_status()
+        if response.is_error:
+            error_msg = f"Error during transaction push: {response.content}"
+            if error_handling_info is not None:
+                error_msg += f" Error handling info: {error_handling_info}"
+            raise APIError(error_msg, response)
         log.info("Transaction signed and broadcast. ID %s", signed_bundle.name().hex())
         return response.json()
 
@@ -498,8 +721,6 @@ class CircuitRPCClient:
         payload = self._build_base_payload(human_readable=human_readable)
         return await self._make_api_request("POST", "/savings", payload)
 
-
-
     async def savings_deposit(self, AMOUNT: float, INTEREST: float = None, units=False):
         amount = AMOUNT if units else int(AMOUNT * self.consts["MCAT"])
         if INTEREST is not None:
@@ -546,7 +767,17 @@ class CircuitRPCClient:
 
     ### ANNOUNCERS ###
     async def announcer_show(self, approved=False, valid=False, penalizable=False, incl_spent=False):
-        """Show announcer information using DRY helper methods."""
+        """List announcer coins with optional filters.
+
+        Args:
+            approved: Include only approved announcers.
+            valid: Include only valid (not expired/invalidated) announcers.
+            penalizable: Include announcers eligible for penalty.
+            incl_spent: Include already spent coins in the results.
+
+        Returns:
+            A list of announcer coin records returned by the RPC service.
+        """
         payload = self._build_base_payload(
             approved=approved, valid=valid, penalizable=penalizable, include_spent_coins=incl_spent
         )
@@ -554,10 +785,20 @@ class CircuitRPCClient:
         assert isinstance(data, list)
         return data
 
-    async def announcer_launch(self, price, units=False):
-        """Launch announcer using DRY transaction processing."""
+    async def announcer_launch(self, price):
+        """Create and activate a new announcer with the given price.
+
+        This constructs the appropriate payload, requests a spend bundle from
+        the server, signs it locally, submits it, and waits for confirmation.
+
+        Args:
+            price: The initial price value to register for the announcer.
+
+        Returns:
+            The sign_and_push response, typically including the signed bundle.
+        """
         log.info("Launching announcer...")
-        price = price if units else self._convert_amount(price, "PRICE")
+        price = price
         payload = self._build_transaction_payload({"operation": "launch", "args": {"price": price}})
         log.info(f"Launching announcer with price: {price}")
         try:
@@ -575,23 +816,35 @@ class CircuitRPCClient:
         inner_puzzle_hash=None,
         price=None,
         ttl=None,
-        units=False,
     ):
-        """Configure announcer using DRY helper methods."""
+        """Update configuration parameters for an existing announcer.
+
+        If coin_name is not provided, the client will query for a single
+        announcer and use its coin name; otherwise the provided coin is used.
+
+        Args:
+            coin_name: Announcer coin name (optional; auto-detected if unique).
+            make_approvable: Toggle whether the announcer can be approved.
+            deactivate: Deactivate the announcer.
+            deposit: New deposit amount (raw integer units expected by server).
+            min_deposit: New minimum deposit threshold (raw integer units).
+            inner_puzzle_hash: New inner puzzle hash to set.
+            price: New price value to set.
+            ttl: New price time-to-live value.
+
+        Returns:
+            The transaction result from processing the configuration update.
+        """
         coin_name = await self._get_coin_name_if_needed(coin_name, "/announcer", "No announcer found")
 
         # Build args using helper methods for amount conversions
         args = {
             "deactivate": deactivate,
             "make_approvable": make_approvable,
-            "new_deposit": (deposit if units else ceil(deposit * self.consts["MOJOS"]))
-            if deposit is not None
-            else deposit,
-            "new_min_deposit": (min_deposit if units else ceil(min_deposit * self.consts["MOJOS"]))
-            if min_deposit is not None
-            else min_deposit,
+            "new_deposit": int(deposit),
+            "new_min_deposit": int(min_deposit),
             "new_inner_puzzle_hash": inner_puzzle_hash,
-            "new_price": (price if units else self._convert_amount(price, "PRICE")) if price is not None else price,
+            "new_price": price,
             "new_price_ttl": ttl if ttl is not None else ttl,
         }
 
@@ -599,29 +852,42 @@ class CircuitRPCClient:
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
     async def announcer_register(self, coin_name: str = None):
-        """Register announcer using DRY helper methods."""
-        coin_name = await self._get_coin_name_if_needed(coin_name, "/announcers", "No announcer found")
-        payload = self._build_transaction_payload({"operation": "register", "args": {}})
-        return await self._process_transaction(f"/announcers/{coin_name}/", payload)
+        """Register an announcer coin for participation.
 
-    async def announcer_reward(self, coin_name: str = None):
-        """Claim announcer reward using DRY helper methods."""
-        coin_name = await self._get_coin_name_if_needed(coin_name, "/announcers", "No announcer found")
+        If coin_name is omitted and there is exactly one eligible announcer,
+        it will be used automatically; otherwise an explicit coin_name is required.
+        """
+        coin_name = await self._get_coin_name_if_needed(
+            coin_name, "/announcers", "No announcer found", payload_extras={"approved": True, "valid": True}
+        )
         payload = self._build_transaction_payload({"operation": "register", "args": {}})
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
     async def announcer_exit(self, coin_name):
-        """Exit announcer using DRY helper methods."""
+        """Exit (deactivate) a registered announcer coin.
+
+        If coin_name is not provided and exactly one announcer exists, it will
+        be selected automatically; otherwise pass the specific coin name.
+        """
         coin_name = await self._get_coin_name_if_needed(coin_name, "/announcers", "No announcer found")
         payload = self._build_transaction_payload({"operation": "exit", "args": {}})
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
-    async def announcer_update(self, PRICE, coin_name: str = None, fee_coin=False, units=False):
-        """Update announcer price using DRY helper methods."""
+    async def announcer_update(self, price, coin_name: str = None, fee_coin=False):
+        """Mutate an announcer by updating its price and optional fee coin attachment.
+
+        If coin_name is omitted and exactly one announcer exists, it will be
+        used automatically; otherwise specify which announcer to update.
+
+        Args:
+            price: New price value to set (integer units expected by server).
+            coin_name: Optional announcer coin name to target.
+            fee_coin: Whether to attach a fee coin for the update operation.
+        """
         coin_name = await self._get_coin_name_if_needed(coin_name, "/announcer", "No announcer found")
 
         args = {
-            "new_price": PRICE if units else self._convert_amount(PRICE, "PRICE"),
+            "new_price": int(price),
             "attach_fee_coin": fee_coin,
         }
         payload = self._build_transaction_payload({"operation": "mutate", "args": args})
@@ -629,13 +895,19 @@ class CircuitRPCClient:
 
     ### UPKEEP ###
     async def upkeep_invariants(self):
-        """Show protocol invariants using DRY helper methods."""
+        """Fetch protocol invariants from the RPC server.
+
+        Returns a static snapshot of invariant checks useful for diagnostics.
+        """
         return await self._make_api_request("GET", "/protocol/invariants")
 
     async def upkeep_state(
         self, vaults=False, surplus_auctions=False, recharge_auctions=False, treasury=False, bills=False
     ):
-        """Show protocol state using DRY helper methods."""
+        """Fetch protocol state sections with optional filtering.
+
+        If no specific section flags are provided, the full state is returned.
+        """
         # If no option is specified, whole state is returned by default
         if not (vaults or surplus_auctions or recharge_auctions or treasury or bills):
             vaults = True
@@ -657,22 +929,30 @@ class CircuitRPCClient:
 
     ## RPC server ##
     async def upkeep_rpc_sync(self):
-        """Sync RPC server using DRY helper methods."""
+        """Trigger a chain data sync on the RPC server."""
         return await self._make_api_request("POST", "/sync_chain_data")
 
     async def upkeep_rpc_status(self):
-        """Get RPC server status using DRY helper methods."""
+        """Fetch the health/status of the RPC server."""
         return await self._make_api_request("GET", "/health")
 
     async def upkeep_rpc_version(self):
-        """Get RPC server version using DRY helper methods."""
+        """Return the RPC server version string."""
         return await self._make_api_request("GET", "/rpc/version")
 
     ## Announcer ##
     async def upkeep_announcers_list(
         self, coin_name=None, approved=False, valid=False, penalizable=False, incl_spent=False
     ):
-        """List announcers using DRY helper methods."""
+        """List announcers, optionally filtering and/or targeting a specific coin.
+
+        Args:
+            coin_name: Optional announcer coin name to show details for.
+            approved: Filter by approved state.
+            valid: Filter by validity state.
+            penalizable: Filter by penalizable state.
+            incl_spent: Include spent coins in the listing.
+        """
         if coin_name:
             payload = {
                 "coin_name": coin_name,
@@ -691,6 +971,10 @@ class CircuitRPCClient:
         }
         return await self._make_api_request("POST", "/announcers", payload)
 
+    async def self_unlock(self):
+        """Release the store lock."""
+        self.store.unlock()
+
     async def upkeep_announcers_approve(self, coin_name, create_conditions=False, bill_coin_name=None, label=None):
         if create_conditions:
             assert bill_coin_name is None, "Cannot create custom conditions and implement bill at the same time"
@@ -708,10 +992,15 @@ class CircuitRPCClient:
                 response.raise_for_status()
             data = response.json()
             if label:
-                with self.store.lock:
+                with self.store.lock():
                     self.store.set(f"proposals.values.{label}", data["announcements_to_vote_for"])
             return data
         else:
+            if bill_coin_name is not None:
+                if bill_coin_name.startswith("<") and bill_coin_name.endswith(">"):
+                    label = bill_coin_name[1:-1]
+                    bill_coin_name = self.store.get(f"proposals.propose.coins.{label}")
+
             assert bill_coin_name is not None, "Must specify bill to implement when not creating custom conditions"
             bill_response = await self.client.post(
                 "/bills/implement",
@@ -854,7 +1143,10 @@ class CircuitRPCClient:
         bill=None,
         incl_spent=False,
     ):
-        """List bills using DRY helper methods."""
+        """List governance bills with optional state filters.
+
+        The filters correspond to server-side bill state predicates.
+        """
         payload = {
             "synthetic_pks": [],
             "exitable": exitable,
@@ -873,18 +1165,25 @@ class CircuitRPCClient:
 
     ## Registry ##
     async def upkeep_registry_show(self):
-        """Show registry using DRY helper methods."""
+        """Return the on-chain registry state."""
         return await self._make_api_request("POST", "/registry", {})
 
     async def upkeep_registry_reward(self, target_puzzle_hash=None, info=False):
-        """Distribute registry rewards using DRY helper methods."""
+        """Distribute rewards from the registry to a target puzzle hash.
+
+        Args:
+            target_puzzle_hash: Optional destination for rewards; if omitted the
+                default server behavior is used.
+            info: If True, request only informational output without submitting a tx.
+        """
         payload = self._build_base_payload(target_puzzle_hash=target_puzzle_hash, info=info)
-        # TODO: don't we need to sign and broadcast this transaction?!
-        return await self._make_api_request("POST", "/registry/distribute_rewards", payload)
+        if info:
+            return await self._make_api_request("POST", "/registry/distribute_rewards", payload)
+        return await self._process_transaction("/registry/distribute_rewards", payload)
 
     ## Recharge auction ##
     async def upkeep_recharge_list(self):
-        """List recharge auctions using DRY helper methods."""
+        """List all active recharge auctions."""
         return await self._make_api_request("POST", "/recharge_auctions", {})
 
     async def upkeep_recharge_launch(self, create_conditions=False, bill_coin_name=None):
@@ -937,7 +1236,7 @@ class CircuitRPCClient:
             return sig_response
 
     async def upkeep_recharge_start(self, coin_name: str):
-        """Start recharge auction using DRY helper methods."""
+        """Start a recharge auction for the specified auction coin."""
         payload = self._build_transaction_payload({"operation": "start", "args": {}})
         return await self._process_transaction(f"/recharge_auctions/{coin_name}/", payload)
 
@@ -949,7 +1248,15 @@ class CircuitRPCClient:
         target_puzzle_hash: str | None = None,
         info=False,
     ):
-        """Bid in recharge auction using DRY helper methods."""
+        """Place a bid in a recharge auction.
+
+        Args:
+            coin_name: The recharge auction coin to bid on.
+            BYC_amount: Amount of BYC to bid (float; converted to mCAT units).
+            crt: Optional CRT amount to include (float; converted to mCAT units).
+            target_puzzle_hash: Optional target puzzle hash for proceeds.
+            info: If True, return only informational data without broadcasting.
+        """
         args = {
             "byc_amount": self._convert_amount(BYC_amount, "MCAT") if BYC_amount else None,
             "crt_amount": ceil(crt * self.consts["MCAT"]) if crt else None,
@@ -965,22 +1272,29 @@ class CircuitRPCClient:
         return await self._process_transaction(f"/recharge_auctions/{coin_name}/", payload)
 
     async def upkeep_recharge_settle(self, coin_name: str):
-        """Settle recharge auction using DRY helper methods."""
+        """Settle a completed recharge auction, finalizing outcomes."""
         payload = self._build_transaction_payload({"operation": "settle", "args": {}})
         return await self._process_transaction(f"/recharge_auctions/{coin_name}/", payload)
 
     ## Surplus auction ##
     async def upkeep_surplus_list(self):
-        """List surplus auctions using DRY helper methods."""
+        """List all active surplus auctions."""
         return await self._make_api_request("POST", "/surplus_auctions", {})
 
     async def upkeep_surplus_start(self):
-        """Start surplus auction using DRY helper methods."""
+        """Start a surplus auction cycle on the protocol."""
         payload = self._build_transaction_payload({})
         return await self._process_transaction("/surplus_auctions/start", payload)
 
     async def upkeep_surplus_bid(self, coin_name: str, amount: float = None, target_puzzle_hash=None, info=None):
-        """Bid in surplus auction using DRY helper methods."""
+        """Place a bid in a surplus auction.
+
+        Args:
+            coin_name: The surplus auction coin to bid on.
+            amount: Amount of BYC to bid (float; converted to mCAT units).
+            target_puzzle_hash: Optional target puzzle hash for proceeds.
+            info: If True, return only informational data without broadcasting.
+        """
         if not info:
             assert amount is not None
 
@@ -998,17 +1312,21 @@ class CircuitRPCClient:
         return await self._process_transaction(f"/surplus_auctions/{coin_name}/", payload)
 
     async def upkeep_surplus_settle(self, coin_name: str):
-        """Settle surplus auction using DRY helper methods."""
+        """Settle a completed surplus auction, finalizing distribution."""
         payload = self._build_transaction_payload({"operation": "settle", "args": {}})
         return await self._process_transaction(f"/surplus_auctions/{coin_name}/", payload)
 
     ## Treasury ##
     async def upkeep_treasury_show(self):
-        """Show treasury using DRY helper methods."""
+        """Return current treasury state and balances."""
         return await self._make_api_request("POST", "/treasury", {})
 
     async def upkeep_treasury_rebalance(self, info=False):
-        """Rebalance treasury using DRY helper methods."""
+        """Rebalance treasury assets; optionally return only info.
+
+        Args:
+            info: If True, return whether rebalance can execute (no tx).
+        """
         if info:
             treasury_data = await self._make_api_request("POST", "/treasury", {})
             return {"action_executable": treasury_data["can_rebalance"]}
@@ -1226,7 +1544,10 @@ class CircuitRPCClient:
         bill=None,
         incl_spent=False,
     ):
-        """List bills using DRY helper methods."""
+        """List governance bills with optional state filters.
+
+        Mirrors upkeep_bills_list but uses base payload helper.
+        """
         payload = self._build_base_payload(
             exitable=exitable,
             empty=empty,
@@ -1243,7 +1564,12 @@ class CircuitRPCClient:
         return await self._make_api_request("POST", "/bills", payload)
 
     async def bills_toggle(self, coin_name: str, info=False):
-        """Toggle governance mode of a coin using DRY helper methods."""
+        """Toggle a CRT coin between plain and governance modes.
+
+        Args:
+            coin_name: The CRT coin to toggle.
+            info: If True, return info about the prospective toggle without sending a tx.
+        """
         if info:
             # For info requests, just make the API call without processing transaction
             payload = self._build_base_payload(coin_name=coin_name, info=info)
@@ -1267,7 +1593,7 @@ class CircuitRPCClient:
         return sig_response
 
     async def bills_reset(self, coin_name: str):
-        """Reset a bill using DRY helper methods."""
+        """Reset a bill on a governance coin back to empty state."""
         # Get coin name if not provided, using custom logic for empty bills
         if not coin_name:
             payload = self._build_base_payload(include_spent_coins=False, empty_only=True)
@@ -1335,15 +1661,14 @@ class CircuitRPCClient:
             raise Exception("New proposal coin not found in returned bundle")
         if label:
             log.debug("Storing proposal coin %s with label %s", new_proposal_coin.name(), label)
-            with self.store.lock:
-                self.store.set(f"proposals.propose.coins.{label}", new_proposal_coin.name().hex())
+            with self.store.transaction() as data:
+                data[f"proposals.propose.coins.{label}"] = new_proposal_coin.name().hex()
         return tx_result
 
     async def bills_implement(self, coin_name: str = None, info: bool = False):
-        coins = []
         if coin_name is None or info:
             payload = self._build_base_payload(include_spent_coins=False, empty_only=False, non_empty_only=True)
-            data = await self._make_api_request("POST", "/bills", payload)
+            data: list = await self._make_api_request("POST", "/bills", payload)
 
             if coin_name:
                 coins = [coin for coin in data if coin["name"] == coin_name]
@@ -1353,9 +1678,11 @@ class CircuitRPCClient:
                 assert len(coins) > 0, "There are no proposed bills"
                 assert coins[0]["status"]["implementable_in"] <= 0, "No implementable bill found"
                 coin_name = coins[0]["name"]
-
-        if info:
             return coins
+        else:
+            if coin_name.startswith("<") and coin_name.endswith(">"):
+                label = coin_name[1:-1]
+                coin_name = self.store.get(f"proposals.propose.coins.{label}")
 
         # Process as transaction
         payload = self._build_transaction_payload({"coin_name": coin_name})
@@ -1363,11 +1690,16 @@ class CircuitRPCClient:
 
     ### ORACLE ###
     async def oracle_show(self):
-        """Show oracle information using DRY helper methods."""
+        """Return current oracle state and parameters from the RPC server."""
         return await self._make_api_request("POST", "/oracle", {})
 
     async def oracle_update(self, info=False):
-        """Update oracle using DRY helper methods."""
+        """Update on-chain oracle data.
+
+        If info is True, returns informational output from the server about a
+        potential update without broadcasting a transaction. Otherwise, builds,
+        signs, submits, and waits for confirmation of the update transaction.
+        """
         if info:
             # For info requests, just make the API call without processing transaction
             payload = self._build_base_payload(info=info)
@@ -1379,12 +1711,21 @@ class CircuitRPCClient:
 
     ### STATUTES ###
     async def statutes_list(self, full=False):
-        """List statutes using DRY helper methods."""
+        """List protocol statutes.
+
+        Args:
+            full: If True, return the full set of statute definitions and metadata.
+        """
         payload = self._build_base_payload(full=full)
         return await self._make_api_request("POST", "/statutes", payload)
 
     async def statutes_update(self, info=False):
-        """Update statutes using DRY helper methods."""
+        """Update protocol statutes on-chain.
+
+        If info is True, fetch informational data about a potential update
+        (no transaction). Otherwise, create, sign, and submit the update
+        transaction and wait for confirmation.
+        """
         if info:
             # For info requests, just make the API call without processing transaction
             return await self._make_api_request("POST", "/statutes/info", {})
@@ -1394,7 +1735,11 @@ class CircuitRPCClient:
         return await self._process_transaction("/statutes/update", payload)
 
     async def statutes_announce(self, *args):
-        """Announce statutes using DRY helper methods."""
+        """Publish a statutes announcement transaction.
+
+        Creates, signs, and submits the announce transaction which may be
+        required after a statutes update, then waits for confirmation.
+        """
         payload = self._build_transaction_payload({})
         return await self._process_transaction("/statutes/announce", payload)
 

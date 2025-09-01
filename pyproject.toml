@@ -1,14 +1,32 @@
 [tool.poetry]
 name = "circuit-cli"
 version = "0.1.0"
-description = ""
+description = "CLI tool to manage your Circuit collateral vault, savings and upkeep the protocol/DAO"
 authors = ["Sebastjan Trepca <set@circuitdao.com>"]
 readme = "README.md"
+keywords = ["circuit", "chia", "blockchain", "dao", "cli"]
+homepage = "https://github.com/circuitdao/circuit-cli"
+repository = "https://github.com/circuitdao/circuit-cli"
+license = "Proprietary"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: Other/Proprietary License",
+  "Operating System :: OS Independent",
+  "Topic :: Utilities",
+]
 
 [tool.poetry.dependencies]
 python = "^3.11"
 httpx = "^0.28.1"
 chia-blockchain = "2.5.5"
+
+[tool.poetry.urls]
+"Bug Tracker" = "https://github.com/circuitdao/circuit-cli/issues"
+"Source" = "https://github.com/circuitdao/circuit-cli"
 
 [build-system]
 requires = ["poetry-core"]
@@ -16,8 +34,6 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 circuit-cli = "circuit_cli.circuit_rpc_cli:main"
-price-announcer-cli = "circuit_cli.price_announcer_cli:main"
-keeper-cli = "circuit_cli.keeper_cli:main"
 
 [tool.ruff]
 line-length = 120
