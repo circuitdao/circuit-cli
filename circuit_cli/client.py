@@ -124,7 +124,7 @@ class CircuitRPCClient:
             )
 
         self.consts = {
-            "PRICE_PRECISION": 1000000,  # Default 6 decimals
+            "price_PRECISION": 1000000,  # Default 6 decimals
             "MOJOS": 1000000000000,  # Default XCH to mojo conversion
             "MCAT": 1000,  # Default CAT decimals
         }
@@ -264,27 +264,48 @@ class CircuitRPCClient:
         base_payload.update(endpoint_specific_data)
         return base_payload
 
-    def _convert_amount(self, amount: float, currency_type: str = "MOJOS") -> int:
-        """Convert a human-friendly amount to on-chain units.
+
+    def _convert_number(self, number: str | float | int | None, unit_type: str = None, ceil=False) -> int | None:
+        """Convert a human-friendly number to on-chain units (if not already in on-chain units).
 
         Args:
-            amount: The decimal amount in human-friendly units.
-            currency_type: Unit type to convert to. One of: "MOJOS", "MCAT", "PRICE".
+            number: A str or float in human-friendly units, an int in on-chain units, or None.
+            unit_type: Unit type to convert to. One of: "MOJOS", "MCAT", "PRICE".
+            ceil: By default, converted numbers are rounded down, if ceil is True, converted number is rounded up.
 
         Returns:
-            Integer number of base units according to the selected currency_type.
+            Integer number of base units according to the selected unit_type.
 
         Raises:
-            ValueError: If an unknown currency_type is provided.
+            ValueError: If an unknown unit_type is provided.
+            TypeError: If number is of type other than str, float, int or None
         """
-        if currency_type == "MOJOS":
-            return floor(amount * self.consts["MOJOS"])
-        elif currency_type == "MCAT":
-            return floor(amount * self.consts["MCAT"])
-        elif currency_type == "PRICE":
-            return int(amount * self.consts["PRICE_PRECISION"])
-        else:
-            raise ValueError(f"Unknown currency type: {currency_type}")
+        if number is None:
+            return None
+        if isinstance(number, (str, float)):
+            if unit_type == "MOJOS":
+                if ceil:
+                    return ceil(number * self.consts["MOJOS"])
+                else:
+                    return floor(number * self.consts["MOJOS"])
+            elif unit_type == "MCAT":
+                if ceil:
+                    return ceil(number * self.consts["MCAT"])
+                else:
+                    return floor(number * self.consts["MCAT"])
+            elif unit_type == "PRICE":
+                if ceil:
+                    return ceil(number * self.consts["price_PRECISION"])
+                else:
+                    return floor(number * self.consts["price_PRECISION"])
+            elif unit_type is None:
+                raise ValueError("Unit type must not be None when converting str or float to int")
+            else:
+                raise ValueError(f"Unknown unit type: {unit_type}")
+        if isinstance(number, int):
+            return number
+        raise TypeError(f"Can only convert from str, float and int to int, got {type(number).__name__}")
+
 
     async def _process_transaction(
         self, endpoint: str, payload: Dict[str, Any], error_handling_info: Optional[Dict[str, Any]] = None
@@ -503,7 +524,14 @@ class CircuitRPCClient:
         return response.json()
 
     ### WALLET ###
-    async def wallet_balances(self, human_readable=False):
+    async def wallet_addresses(self, derivation_index: int, puzzle_hashes=False):
+        payload = self._build_base_payload(
+            derivation_index=derivation_index,
+            include_puzzle_hashes=puzzle_hashes,
+        )
+        return await self._make_api_request("POST", "/wallet/addresses", payload)
+
+    async def wallet_balances(self):
         """
         Get wallet balances for XCH, BYC, and CRT coins.
 
@@ -511,15 +539,11 @@ class CircuitRPCClient:
         in the user's wallet. This includes XCH (Chia), BYC (stablecoin), and
         CRT (governance tokens) that are not currently in governance mode.
 
-        Args:
-            human_readable (bool): If True, format numbers in human-readable format.
-                                 Defaults to False.
-
         Returns:
             dict: A dictionary containing balance information with keys:
                 - xch_balance: XCH balance in mojos
-                - byc_balance: BYC balance in mCAT units
-                - crt_balance: CRT balance
+                - byc_balance: BYC balance in mBYC
+                - crt_balance: CRT balance in mCRT
                 - total_coins: Total number of coins
                 - pending_balance: Pending transactions balance
 
@@ -527,10 +551,10 @@ class CircuitRPCClient:
             balances = client.wallet_balances()
             # Returns: {"xch_balance": 5000000000000, "byc_balance": 1500000, ...}
         """
-        payload = self._build_base_payload(human_readable=human_readable)
+        payload = self._build_base_payload()
         return await self._make_api_request("POST", "/balances", payload)
 
-    async def wallet_coins(self, type=None, human_readable=False):
+    async def wallet_coins(self, type=None):
         """
         Get detailed information about individual coins in the wallet.
 
@@ -548,7 +572,6 @@ class CircuitRPCClient:
                 - "empty": Empty governance coins
                 - "bill": Governance coins with bills
                 - None: Default CRT coins not in governance mode
-            human_readable (bool): Format numbers in human-readable format.
 
         Returns:
             dict: Contains coin information with keys:
@@ -560,7 +583,7 @@ class CircuitRPCClient:
             coins_info = client.wallet_coins(type="xch")
             # Returns: {"coins": [...], "total_count": 5, "confirmed_count": 4}
         """
-        payload = self._build_base_payload(coin_type=type, human_readable=human_readable)
+        payload = self._build_base_payload(coin_type=type)
         return await self._make_api_request("POST", "/coins", payload)
 
     async def wallet_toggle(self, coin_name: str, info=False):
@@ -586,17 +609,13 @@ class CircuitRPCClient:
         return await self.bills_toggle(coin_name, info)
 
     ### COLLATERAL VAULT ###
-    async def vault_show(self, human_readable=False):
+    async def vault_show(self):
         """
         Show information about the user's collateral vault.
 
         Displays comprehensive information about the user's vault including
         collateral amount, borrowed amount, health ratio, liquidation status,
         and other vault parameters.
-
-        Args:
-            human_readable (bool): Format numbers in human-readable format.
-                                 Defaults to False.
 
         Returns:
             dict: Vault information containing:
@@ -611,10 +630,10 @@ class CircuitRPCClient:
             vault_info = client.vault_show()
             # Returns: {"vault_id": "0x...", "collateral_amount": 10000000000000, ...}
         """
-        payload = self._build_base_payload(human_readable=human_readable)
+        payload = self._build_base_payload()
         return await self._make_api_request("POST", "/vault", payload)
 
-    async def vault_deposit(self, amount: float):
+    async def vault_deposit(self, amount):
         """
         Deposit XCH collateral into the vault.
 
@@ -631,10 +650,10 @@ class CircuitRPCClient:
             result = client.vault_deposit(5.0)
             # Deposits 5 XCH as collateral into the vault
         """
-        payload = self._build_transaction_payload({"amount": self._convert_amount(amount, "MOJOS")})
+        payload = self._build_transaction_payload({"amount": self._convert_number(amount, "MOJOS")})
         return await self._process_transaction("/vault/deposit", payload)
 
-    async def vault_withdraw(self, amount: float):
+    async def vault_withdraw(self, amount):
         """
         Withdraw XCH collateral from the vault.
 
@@ -651,10 +670,10 @@ class CircuitRPCClient:
             result = client.vault_withdraw(2.0)
             # Withdraws 2 XCH collateral from the vault
         """
-        payload = self._build_transaction_payload({"amount": self._convert_amount(amount, "MOJOS")})
+        payload = self._build_transaction_payload({"amount": self._convert_number(amount, "MOJOS")})
         return await self._process_transaction("/vault/withdraw", payload)
 
-    async def vault_borrow(self, amount: float):
+    async def vault_borrow(self, amount):
         """
         Borrow BYC stablecoin against vault collateral.
 
@@ -672,10 +691,10 @@ class CircuitRPCClient:
             result = client.vault_borrow(1000.0)
             # Borrows 1000 BYC against vault collateral
         """
-        payload = self._build_transaction_payload({"amount": self._convert_amount(amount, "MCAT")})
+        payload = self._build_transaction_payload({"amount": self._convert_number(amount, "MCAT")})
         return await self._process_transaction("/vault/borrow", payload)
 
-    async def vault_repay(self, amount: float):
+    async def vault_repay(self, amount):
         """
         Repay BYC debt to the vault.
 
@@ -692,20 +711,16 @@ class CircuitRPCClient:
             result = client.vault_repay(500.0)
             # Repays 500 BYC of vault debt
         """
-        payload = self._build_transaction_payload({"amount": self._convert_amount(amount, "MCAT")})
+        payload = self._build_transaction_payload({"amount": self._convert_number(amount, "MCAT")})
         return await self._process_transaction("/vault/repay", payload)
 
     ### SAVINGS VAULT ###
-    async def savings_show(self, human_readable=False):
+    async def savings_show(self):
         """
         Show information about the user's savings vault.
 
         Displays information about BYC savings including total deposited amount,
         interest earned, and available withdrawal balance.
-
-        Args:
-            human_readable (bool): Format numbers in human-readable format.
-                                 Defaults to False.
 
         Returns:
             dict: Savings information containing:
@@ -718,19 +733,16 @@ class CircuitRPCClient:
             savings_info = client.savings_show()
             # Returns: {"total_deposited": 5000000, "interest_earned": 125000, ...}
         """
-        payload = self._build_base_payload(human_readable=human_readable)
+        payload = self._build_base_payload()
         return await self._make_api_request("POST", "/savings", payload)
 
-    async def savings_deposit(self, amount: float, interest: float = None, units=False):
-        amount = amount if units else int(amount * self.consts["MCAT"])
-        if interest is not None:
-            interest = interest if units else int(interest * self.consts["MCAT"])
+    async def savings_deposit(self, amount, interest=None):
         response = self.client.post(
             "/savings/deposit",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                "amount": amount,
-                "treasury_withdraw_amount": interest,
+                "amount": self._convert_number(amount, "MCAT"),
+                "treasury_withdraw_amount": self._convert_number(interest, "MCAT"),
                 "fee_per_cost": self.fee_per_cost,
             },
         )
@@ -746,16 +758,13 @@ class CircuitRPCClient:
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
 
-    async def savings_withdraw(self, amount: float, interest: float = None, units=False):
-        amount = amount if units else int(amount * self.consts["MCAT"])
-        if interest is not None:
-            interest = interest if units else int(interest * self.consts["MCAT"])
+    async def savings_withdraw(self, amount, interest=None):
         response = self.client.post(
             "/savings/withdraw",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                "amount": amount,
-                "treasury_withdraw_amount": interest,
+                "amount": self._convert_number(amount, "MCAT"),
+                "treasury_withdraw_amount": self._convert_number(interest, "MCAT"),
                 "fee_per_cost": self.fee_per_cost,
             },
         )
@@ -804,8 +813,9 @@ class CircuitRPCClient:
             The sign_and_push response, typically including the signed bundle.
         """
         log.info("Launching announcer...")
-        price = price
-        payload = self._build_transaction_payload({"operation": "launch", "args": {"price": price}})
+        payload = self._build_transaction_payload(
+            {"operation": "launch", "args": {"price": self._convert_number(price, "PRICE")}}
+        )
         log.info(f"Launching announcer with price: {price}")
         try:
             return await self._process_transaction("/announcers/launch/", payload)
@@ -816,12 +826,13 @@ class CircuitRPCClient:
         self,
         coin_name,
         make_approvable=False,
-        deactivate=False,
         deposit=None,
         min_deposit=None,
         inner_puzzle_hash=None,
         price=None,
         ttl=None,
+        cancel_deactivation=False,
+        deactivate=False,
     ):
         """Update configuration parameters for an existing announcer.
 
@@ -831,7 +842,7 @@ class CircuitRPCClient:
         Args:
             coin_name: Announcer coin name (optional; auto-detected if unique).
             make_approvable: Toggle whether the announcer can be approved.
-            deactivate: Deactivate the announcer.
+            deactivate: Deactivate the announcer. None to keep current approval status
             deposit: New deposit amount (raw integer units expected by server).
             min_deposit: New minimum deposit threshold (raw integer units).
             inner_puzzle_hash: New inner puzzle hash to set.
@@ -841,23 +852,27 @@ class CircuitRPCClient:
         Returns:
             The transaction result from processing the configuration update.
         """
+
+        assert not (cancel_deactivation and deactivate), "Cannot both deactivate and cancel deactivation at the same time"
+
         coin_name = await self._get_coin_name_if_needed(coin_name, "/announcer", "No announcer found")
 
         # Build args using helper methods for amount conversions
         args = {
-            "deactivate": deactivate,
             "make_approvable": make_approvable,
-            "new_deposit": int(deposit),
-            "new_min_deposit": int(min_deposit),
+            "new_deposit": self._convert_number(deposit, "MOJOS"),
+            "new_min_deposit": self._convert_number(min_deposit, "MOJOS"),
             "new_inner_puzzle_hash": inner_puzzle_hash,
-            "new_price": price,
-            "new_price_ttl": ttl if ttl is not None else ttl,
+            "new_price": self._convert_number(price, "PRICE"),
+            "new_price_ttl": self._convert_number(ttl),
+            "cancel_deactivation": cancel_deactivation,
+            "deactivate": deactivate,
         }
 
         payload = self._build_transaction_payload({"operation": "configure", "args": args})
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
-    async def announcer_register(self, coin_name: str = None):
+    async def announcer_register(self, coin_name=None):
         """Register an announcer coin for participation.
 
         If coin_name is omitted and there is exactly one eligible announcer,
@@ -879,7 +894,7 @@ class CircuitRPCClient:
         payload = self._build_transaction_payload({"operation": "exit", "args": {}})
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
-    async def announcer_update(self, price, coin_name: str = None, fee_coin=False):
+    async def announcer_update(self, price, coin_name=None, fee_coin=False):
         """Mutate an announcer by updating its price and optional fee coin attachment.
 
         If coin_name is omitted and exactly one announcer exists, it will be
@@ -893,7 +908,7 @@ class CircuitRPCClient:
         coin_name = await self._get_coin_name_if_needed(coin_name, "/announcer", "No announcer found")
 
         args = {
-            "new_price": int(price),
+            "new_price": self._convert_number(price, "PRICE"),
             "attach_fee_coin": fee_coin,
         }
         payload = self._build_transaction_payload({"operation": "mutate", "args": args})
@@ -1241,17 +1256,17 @@ class CircuitRPCClient:
             await self.wait_for_confirmation(signed_bundle)
             return sig_response
 
-    async def upkeep_recharge_start(self, coin_name: str):
+    async def upkeep_recharge_start(self, coin_name):
         """Start a recharge auction for the specified auction coin."""
         payload = self._build_transaction_payload({"operation": "start", "args": {}})
         return await self._process_transaction(f"/recharge_auctions/{coin_name}/", payload)
 
     async def upkeep_recharge_bid(
         self,
-        coin_name: str,
-        BYC_amount: float | None = None,
-        crt: float | None = None,
-        target_puzzle_hash: str | None = None,
+        coin_name,
+        BYC_amount=None,
+        crt=None,
+        target_puzzle_hash=None,
         info=False,
     ):
         """Place a bid in a recharge auction.
@@ -1264,8 +1279,8 @@ class CircuitRPCClient:
             info: If True, return only informational data without broadcasting.
         """
         args = {
-            "byc_amount": self._convert_amount(BYC_amount, "MCAT") if BYC_amount else None,
-            "crt_amount": ceil(crt * self.consts["MCAT"]) if crt else None,
+            "byc_amount": self._convert_number(BYC_amount, "MCAT"),
+            "crt_amount": self._convert_number(crt, "MCAT", ceil=True),
             "target_puzzle_hash": target_puzzle_hash,
             "info": info,
         }
@@ -1277,7 +1292,7 @@ class CircuitRPCClient:
 
         return await self._process_transaction(f"/recharge_auctions/{coin_name}/", payload)
 
-    async def upkeep_recharge_settle(self, coin_name: str):
+    async def upkeep_recharge_settle(self, coin_name):
         """Settle a completed recharge auction, finalizing outcomes."""
         payload = self._build_transaction_payload({"operation": "settle", "args": {}})
         return await self._process_transaction(f"/recharge_auctions/{coin_name}/", payload)
@@ -1292,7 +1307,7 @@ class CircuitRPCClient:
         payload = self._build_transaction_payload({})
         return await self._process_transaction("/surplus_auctions/start", payload)
 
-    async def upkeep_surplus_bid(self, coin_name: str, amount: float = None, target_puzzle_hash=None, info=None):
+    async def upkeep_surplus_bid(self, coin_name, amount=None, target_puzzle_hash=None, info=None):
         """Place a bid in a surplus auction.
 
         Args:
@@ -1305,7 +1320,7 @@ class CircuitRPCClient:
             assert amount is not None
 
         args = {
-            "amount": self._convert_amount(amount, "MCAT") if amount else None,
+            "amount": self._convert_number(amount, "MCAT"),
             "target_puzzle_hash": target_puzzle_hash,
             "info": info,
         }
@@ -1470,13 +1485,13 @@ class CircuitRPCClient:
         )
         return sig_response
 
-    async def upkeep_vaults_liquidate(self, coin_name: str):
+    async def upkeep_vaults_liquidate(self, coin_name):
         keeper_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
         response = await self.client.post(
             "/vaults/start_auction",
             json={
-                "synthetic_pks": [],
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "vault_name": coin_name,
                 "initiator_puzzle_hash": keeper_puzzle_hash,
                 "fee_per_cost": self.fee_per_cost,
@@ -1492,7 +1507,7 @@ class CircuitRPCClient:
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
 
-    async def upkeep_vaults_bid(self, coin_name: str, amount: float):
+    async def upkeep_vaults_bid(self, coin_name, amount, max_bid_price=None):
         keeper_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
         response = await self.client.post(
@@ -1500,8 +1515,8 @@ class CircuitRPCClient:
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "vault_name": coin_name,
-                "amount": floor(amount * self.consts["MCAT"]),
-                "max_bid_price": None,  # TODO: get from command line
+                "amount": self._convert_number(amount, "MCAT"), #floor(amount * self.consts["MCAT"]),
+                "max_bid_price": self._convert_number(max_bid_price, "PRICE"),
                 "target_puzzle_hash": keeper_puzzle_hash,
                 "fee_per_cost": self.fee_per_cost,
             },
@@ -1516,7 +1531,7 @@ class CircuitRPCClient:
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
 
-    async def upkeep_vaults_recover(self, coin_name: str):
+    async def upkeep_vaults_recover(self, coin_name):
         response = await self.client.post(
             "/vaults/recover_bad_debt",
             json={
@@ -1569,7 +1584,7 @@ class CircuitRPCClient:
         )
         return await self._make_api_request("POST", "/bills", payload)
 
-    async def bills_toggle(self, coin_name: str, info=False):
+    async def bills_toggle(self, coin_name, info=False):
         """Toggle a CRT coin between plain and governance modes.
 
         Args:
@@ -1598,7 +1613,7 @@ class CircuitRPCClient:
 
         return sig_response
 
-    async def bills_reset(self, coin_name: str):
+    async def bills_reset(self, coin_name):
         """Reset a bill on a governance coin back to empty state."""
         # Get coin name if not provided, using custom logic for empty bills
         if not coin_name:
@@ -1618,11 +1633,11 @@ class CircuitRPCClient:
         value: str = None,
         coin_name: str = None,
         force: bool = False,
-        proposal_threshold: int = None,
-        veto_interval: int = None,
-        implementation_delay: int = None,
-        max_delta: int = None,
-        skip_verify: bool = False,
+        proposal_threshold=None,
+        veto_interval=None,
+        implementation_delay=None,
+        max_delta=None,
+        skip_verify=False,
         label=None,
     ):
         assert index is not None, "Must specify Statute index (between -1 and 42 included)"
@@ -1648,10 +1663,10 @@ class CircuitRPCClient:
                 "statute_index": index,
                 "value": value,
                 "value_is_program": False,
-                "threshold_amount_to_propose": proposal_threshold,
-                "veto_seconds": veto_interval,
-                "delay_seconds": implementation_delay,
-                "max_delta": max_delta,
+                "threshold_amount_to_propose": self._convert_number(proposal_threshold, "MCAT"),
+                "veto_seconds": self._convert_number(veto_interval),
+                "delay_seconds": self._convert_number(implementation_delay),
+                "max_delta": self._convert_number(max_delta),
                 "force": force,
                 "verify": not skip_verify,
             }
@@ -1671,7 +1686,7 @@ class CircuitRPCClient:
                 data[f"proposals.propose.coins.{label}"] = new_proposal_coin.name().hex()
         return tx_result
 
-    async def bills_implement(self, coin_name: str = None, info: bool = False):
+    async def bills_implement(self, coin_name=None, info=False):
         if coin_name is None or info:
             payload = self._build_base_payload(include_spent_coins=False, empty_only=False, non_empty_only=True)
             data: list = await self._make_api_request("POST", "/bills", payload)

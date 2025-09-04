@@ -38,7 +38,11 @@ async def cli():
         help="Base URL for the Circuit RPC API server",
     )
     parser.add_argument(
-        "--add-sig-data", type=str, default=os.environ.get("ADD_SIG_DATA", ""), help="Additional signature data"
+        "--add-sig-data", type=str, default=os.environ.get(
+            "ADD_SIG_DATA",
+            "ccd5bb71183532bff220ba46c268991a3ff07eb358e8255a65c30a2dce0e5fbb", # simulator0
+            #"37a90eb5185a9c4439a91ddc98bbadce7b4feba060d50116a067de66bf236615", # testnet11
+        ), help="Additional signature data"
     )
     parser.add_argument(
         "--no-wait", type=str, default=os.environ.get("NO_WAIT_TX", ""), help="Don't wait for tx to be confirmed."
@@ -456,8 +460,8 @@ async def cli():
     )
     upkeep_vaults_bid_parser.add_argument("coin_name", type=str, help="Name of vault in liquidation")
     upkeep_vaults_bid_parser.add_argument("amount", type=float, help="Amount of BYC to bid")
-    # upkeep_vaults_auction_parser.add_argument("-s", "--start", action="store_true", help="Start or restart a liquidation auction")
-    # upkeep_vaults_auction_parser.add_argument("-b", "--bid-amount", type=int, help="Submit a bid in a liquidation auction. Specify bid amount in mBYC")
+    upkeep_vaults_bid_parser.add_argument(
+        "--max-bid-price", type=float, default=None, help="Maximum price for bid")
     upkeep_vaults_recover_parser = upkeep_vaults_subparsers.add_parser(
         "recover", help="Recover bad debt", description="Recovers bad debt from a collateral vault."
     )
@@ -562,14 +566,14 @@ async def cli():
         "-f", "--force", action="store_true", help="Propose bill even if resulting Statutes are not consistent"
     )
     bills_propose_parser.add_argument(
-        "--proposal-threshold", default=None, type=int, help="Min amount of CRT required to propose new Statute value"
+        "--proposal-threshold", default=None, type=float, help="Min amount of CRT required to propose new Statute value"
     )
     bills_propose_parser.add_argument("-v", "--veto-interval", type=int, default=None, help="Veto period in seconds")
     bills_propose_parser.add_argument(
         "-d", "--implementation-delay", type=int, default=None, help="Implementation delay in seconds"
     )
     bills_propose_parser.add_argument(
-        "--max-delta", type=int, default=None, help="Max absolute amount in bps by which Statues value may change"
+        "--max-delta", type=int, default=None, help="Max absolute amount by which Statues value may change"
     )
     bills_propose_parser.add_argument("-s", "--skip-verify", action="store_true", help="Skip statutes integrity checks")
     bills_propose_parser.add_argument(
@@ -596,6 +600,21 @@ async def cli():
     ### WALLET ###
     wallet_parser = subparsers.add_parser("wallet", help="Wallet commands")
     wallet_subparsers = wallet_parser.add_subparsers(dest="action")
+
+    ## addresses ##
+    wallet_addresses_parser = wallet_subparsers.add_parser(
+        "addresses",
+        help="Get wallet addresses",
+        description="Shows wallet addresses and puzzle hashes.",
+    )
+    wallet_addresses_parser.add_argument(
+        "-i", "--derivation-index", type=int, default=5,
+        help="Derivation index up to which to show wallet addresses. Default: 5",
+    )
+    wallet_addresses_parser.add_argument(
+        "-p", "--puzzle_hashes", action="store_true",
+        help="Also show puzzle hashes",
+    )
 
     ## balances ##
     wallet_balances_parser = wallet_subparsers.add_parser(
@@ -632,7 +651,7 @@ async def cli():
     announcer_subparsers = announcer_parser.add_subparsers(dest="action")
 
     ## launch ##
-    announcer_launch_parser = announcer_subparsers.add_parser("launch", help="Launch an announcer")
+    announcer_launch_parser = announcer_subparsers.add_parser("launch", help="Launch an announcer", description="Launches an announcer.")
     announcer_launch_parser.add_argument("price", type=float, help="Initial announcer price in USD per XCH")
 
     ## fasttrack (launch + approve) ##
@@ -676,7 +695,7 @@ async def cli():
         help="Update announcer price",
         description="Updates the announcer price. The puzzle automatically updates the expiry timestamp.",
     )
-    announcer_update_parser.add_argument("price", type=str, help="New announcer price in USD per XCH")
+    announcer_update_parser.add_argument("price", type=float, help="New announcer price in USD per XCH")
     announcer_update_parser.add_argument(
         "coin_name",
         nargs="?",
@@ -704,15 +723,16 @@ async def cli():
     announcer_configure_parser.add_argument(
         "-a", "--make-approvable", action="store_true", help="Configure announcer so that is becomes approvable"
     )
-    announcer_configure_parser.add_argument("--deposit", type=str, help="New deposit amount in XCH")
-    announcer_configure_parser.add_argument("--min-deposit", type=str, help="New minimum deposit amount in XCH")
-    announcer_configure_parser.add_argument("--inner-puzzle-hash", type=int, help="New inner puzzle hash (re-key)")
+    announcer_configure_parser.add_argument("--deposit", type=float, help="New deposit amount in XCH")
+    announcer_configure_parser.add_argument("--min-deposit", type=float, help="New minimum deposit amount in XCH")
+    announcer_configure_parser.add_argument("--inner-puzzle-hash", type=str, help="New inner puzzle hash (re-key)")
     announcer_configure_parser.add_argument(
         "--price",
         type=float,
         help="New announcer price in USD per XCH. If only updating price, it's more efficient to use 'update' operation",
     )
     announcer_configure_parser.add_argument("--ttl", type=int, help="New price time to live in seconds")
+    announcer_configure_parser.add_argument("-c", "--cancel-deactivation", action="store_true", help="Cancel deactivation of announcer")
     announcer_configure_parser.add_argument("-d", "--deactivate", action="store_true", help="Deactivate announcer")
 
     ## register ##
