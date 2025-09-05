@@ -3,7 +3,7 @@ import httpx
 import logging
 import logging.config
 import sys
-from math import ceil, floor
+from math import floor
 from typing import Optional, Dict, Any
 
 from chia.util.bech32m import encode_puzzle_hash
@@ -85,6 +85,7 @@ class CircuitRPCClient:
         client: Optional[AsyncClient] = None,
         key_count: int = 500,
         no_wait_for_tx: bool = False,
+        dict_store_path: str = None,
     ):
         """Create a CircuitRPCClient.
 
@@ -136,8 +137,10 @@ class CircuitRPCClient:
         self._fee_per_cost = fee_per_cost
         self.fee_per_cost: float | None = None
         self.no_wait_for_confirmation = no_wait_for_tx
-        # Simple persistence store under ~/.circuit/state.json
-        self.store = DictStore()
+        log.info(f"Using no_wait_for_confirmation={no_wait_for_tx}")
+        log.info(f"Using key_count={key_count}")
+        log.info(f"Using dict_store_path={dict_store_path}")
+        self.store = DictStore(dict_store_path)
         # Optional progress handler for streaming progress events
         # It can be a sync or async callable accepting a single dict argument
         self.progress_handler = None
@@ -264,7 +267,6 @@ class CircuitRPCClient:
         base_payload.update(endpoint_specific_data)
         return base_payload
 
-
     def _convert_number(self, number: str | float | int | None, unit_type: str = None, ceil=False) -> int | None:
         """Convert a human-friendly number to on-chain units (if not already in on-chain units).
 
@@ -305,7 +307,6 @@ class CircuitRPCClient:
         if isinstance(number, int):
             return number
         raise TypeError(f"Can only convert from str, float and int to int, got {type(number).__name__}")
-
 
     async def _process_transaction(
         self, endpoint: str, payload: Dict[str, Any], error_handling_info: Optional[Dict[str, Any]] = None
@@ -853,7 +854,9 @@ class CircuitRPCClient:
             The transaction result from processing the configuration update.
         """
 
-        assert not (cancel_deactivation and deactivate), "Cannot both deactivate and cancel deactivation at the same time"
+        assert not (cancel_deactivation and deactivate), (
+            "Cannot both deactivate and cancel deactivation at the same time"
+        )
 
         coin_name = await self._get_coin_name_if_needed(coin_name, "/announcer", "No announcer found")
 
@@ -1515,7 +1518,7 @@ class CircuitRPCClient:
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "vault_name": coin_name,
-                "amount": self._convert_number(amount, "MCAT"), #floor(amount * self.consts["MCAT"]),
+                "amount": self._convert_number(amount, "MCAT"),  # floor(amount * self.consts["MCAT"]),
                 "max_bid_price": self._convert_number(max_bid_price, "PRICE"),
                 "target_puzzle_hash": keeper_puzzle_hash,
                 "fee_per_cost": self.fee_per_cost,

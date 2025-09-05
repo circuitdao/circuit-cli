@@ -8,8 +8,6 @@ from typing import Any, Dict
 
 HOME_DIR = os.path.expanduser("~")
 CIRCUIT_DIR = os.path.join(HOME_DIR, ".circuit")
-DEFAULT_FILE = os.path.join(CIRCUIT_DIR, "state.json")
-LOCK_FILE = os.path.join(CIRCUIT_DIR, "state.lock")
 
 
 class FileLockTimeout(Exception):
@@ -26,9 +24,11 @@ class DictStore:
     - Safe for multi-process use on the same machine
     """
 
-    def __init__(self, path: str = DEFAULT_FILE, lock_path: str = LOCK_FILE):
-        self.path = path
-        self.lock_path = lock_path
+    def __init__(self, dir_path=CIRCUIT_DIR, path="state.json", lock_path=".state.lock"):
+        if dir_path is None:
+            dir_path = CIRCUIT_DIR
+        self.path = os.path.join(dir_path, path)
+        self.lock_path = os.path.join(dir_path, lock_path)
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         # Ensure the file exists
         if not os.path.exists(self.path):

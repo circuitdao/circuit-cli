@@ -31,6 +31,7 @@ async def cli():
     parser = argparse.ArgumentParser(description="Circuit CLI tool")
     subparsers = parser.add_subparsers(dest="command")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    parser.add_argument("-dd", type=str, help="Set persistence directory")
     parser.add_argument(
         "--base-url",
         type=str,
@@ -38,11 +39,14 @@ async def cli():
         help="Base URL for the Circuit RPC API server",
     )
     parser.add_argument(
-        "--add-sig-data", type=str, default=os.environ.get(
+        "--add-sig-data",
+        type=str,
+        default=os.environ.get(
             "ADD_SIG_DATA",
-            "ccd5bb71183532bff220ba46c268991a3ff07eb358e8255a65c30a2dce0e5fbb", # simulator0
-            #"37a90eb5185a9c4439a91ddc98bbadce7b4feba060d50116a067de66bf236615", # testnet11
-        ), help="Additional signature data"
+            "ccd5bb71183532bff220ba46c268991a3ff07eb358e8255a65c30a2dce0e5fbb",  # simulator0
+            # "37a90eb5185a9c4439a91ddc98bbadce7b4feba060d50116a067de66bf236615", # testnet11
+        ),
+        help="Additional signature data",
     )
     parser.add_argument(
         "--no-wait", type=str, default=os.environ.get("NO_WAIT_TX", ""), help="Don't wait for tx to be confirmed."
@@ -460,8 +464,7 @@ async def cli():
     )
     upkeep_vaults_bid_parser.add_argument("coin_name", type=str, help="Name of vault in liquidation")
     upkeep_vaults_bid_parser.add_argument("amount", type=float, help="Amount of BYC to bid")
-    upkeep_vaults_bid_parser.add_argument(
-        "--max-bid-price", type=float, default=None, help="Maximum price for bid")
+    upkeep_vaults_bid_parser.add_argument("--max-bid-price", type=float, default=None, help="Maximum price for bid")
     upkeep_vaults_recover_parser = upkeep_vaults_subparsers.add_parser(
         "recover", help="Recover bad debt", description="Recovers bad debt from a collateral vault."
     )
@@ -608,11 +611,16 @@ async def cli():
         description="Shows wallet addresses and puzzle hashes.",
     )
     wallet_addresses_parser.add_argument(
-        "-i", "--derivation-index", type=int, default=5,
+        "-i",
+        "--derivation-index",
+        type=int,
+        default=5,
         help="Derivation index up to which to show wallet addresses. Default: 5",
     )
     wallet_addresses_parser.add_argument(
-        "-p", "--puzzle_hashes", action="store_true",
+        "-p",
+        "--puzzle_hashes",
+        action="store_true",
         help="Also show puzzle hashes",
     )
 
@@ -651,7 +659,9 @@ async def cli():
     announcer_subparsers = announcer_parser.add_subparsers(dest="action")
 
     ## launch ##
-    announcer_launch_parser = announcer_subparsers.add_parser("launch", help="Launch an announcer", description="Launches an announcer.")
+    announcer_launch_parser = announcer_subparsers.add_parser(
+        "launch", help="Launch an announcer", description="Launches an announcer."
+    )
     announcer_launch_parser.add_argument("price", type=float, help="Initial announcer price in USD per XCH")
 
     ## fasttrack (launch + approve) ##
@@ -732,7 +742,9 @@ async def cli():
         help="New announcer price in USD per XCH. If only updating price, it's more efficient to use 'update' operation",
     )
     announcer_configure_parser.add_argument("--ttl", type=int, help="New price time to live in seconds")
-    announcer_configure_parser.add_argument("-c", "--cancel-deactivation", action="store_true", help="Cancel deactivation of announcer")
+    announcer_configure_parser.add_argument(
+        "-c", "--cancel-deactivation", action="store_true", help="Cancel deactivation of announcer"
+    )
     announcer_configure_parser.add_argument("-d", "--deactivate", action="store_true", help="Deactivate announcer")
 
     ## register ##
@@ -913,6 +925,7 @@ async def cli():
         add_sig_data=args.add_sig_data,
         fee_per_cost=args.fee_per_cost,
         no_wait_for_tx=args.no_wait,
+        dict_store_path=args.dd,
     )
 
     # In text mode, show which HTTP endpoints are being used
@@ -971,6 +984,7 @@ async def cli():
         del kwargs["no_wait"]
         del kwargs["verbose"]
         del kwargs["progress"]
+        del kwargs["dd"]
         log.info(f"Calling {function_name} with {kwargs}")
         result = await getattr(rpc_client, f"{function_name}")(**kwargs)
         if args.json:
