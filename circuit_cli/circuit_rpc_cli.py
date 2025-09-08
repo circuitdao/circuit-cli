@@ -277,7 +277,7 @@ async def cli():
     upkeep_recharge_subparsers = upkeep_recharge_parser.add_subparsers(dest="subaction")
     # list
     upkeep_recharge_list_parser = upkeep_recharge_subparsers.add_parser(
-        "list", help="List recharge auctions", description="Lists recharge auctions."
+        "list", help="List recharge auctions", description="Lists recharge auction coins."
     )
     # launch
     upkeep_recharge_launch_parser = upkeep_recharge_subparsers.add_parser(
@@ -307,7 +307,7 @@ async def cli():
     )
     upkeep_recharge_bid_parser.add_argument("coin_name", type=str, help="Name of recharge auction coin")
     upkeep_recharge_bid_parser.add_argument(
-        "BYC_AMOUNT",
+        "amount", #"BYC_AMOUNT",
         nargs="?",
         type=float,
         default=None,
@@ -315,8 +315,7 @@ async def cli():
     )
     upkeep_recharge_bid_parser.add_argument(
         "-crt",
-        metavar="amount",
-        nargs="?",
+        metavar="AMOUNT",
         type=float,
         default=None,
         help="Amount of CRT to request. Default is max amount.",
@@ -429,17 +428,16 @@ async def cli():
         "list", help="List all vaults", description="Shows information on all collateral vaults."
     )
     upkeep_vaults_list_parser.add_argument(
-        "coin_name",
-        nargs="?",
-        type=str,
-        default=None,
+        "coin_name", nargs="?", type=str, default=None,
         help="[optional] Name of vault coin. If specified, info for only this vault is shown",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-s", "--seized", action="store_true", help="Only list seized vaults (seized = in liquidation or bad debt)"
+        "-s", "--seized", action="store_true", default=None,
+        help="Only list seized vaults (seized = in liquidation or bad debt)"
     )
     upkeep_vaults_list_parser.add_argument(
-        "-n", "--not-seized", action="store_true", help="Only list non-seized vaults"
+        "-n", "--not-seized", action="store_true", default=None,
+        help="Only list non-seized vaults"
     )
     # LATER: add option for only listing liquidatable/in liquidation/restartable/in bad debt vaults
     # LATER: add -o/--ordered arg to order by outstanding SFs
@@ -449,10 +447,7 @@ async def cli():
         description="Transfers stability fees from specified collateral vault to treasury.",
     )
     upkeep_vaults_transfer_parser.add_argument(
-        "coin_name",
-        nargs="?",
-        type=str,
-        default=None,
+        "coin_name", nargs="?", type=str, default=None,
         help="[optional] Name of vault coin. If not specified, vault with greatest amount of SFs to transfer is selected",
     )
     upkeep_vaults_liquidate_parser = upkeep_vaults_subparsers.add_parser(
@@ -463,8 +458,9 @@ async def cli():
         "bid", help="Bid in a liquidation auction", description="Submits a bid in a liquidation auction."
     )
     upkeep_vaults_bid_parser.add_argument("coin_name", type=str, help="Name of vault in liquidation")
-    upkeep_vaults_bid_parser.add_argument("amount", type=float, help="Amount of BYC to bid")
-    upkeep_vaults_bid_parser.add_argument("--max-bid-price", type=float, default=None, help="Maximum price for bid")
+    upkeep_vaults_bid_parser.add_argument("amount", nargs="?", type=float, default=None, help="Amount of BYC to bid. Optional if -i option is specified")
+    upkeep_vaults_bid_parser.add_argument("--max-bid-price", type=float, default=None, help="Maximum price for bid in XCH/BYC")
+    upkeep_vaults_bid_parser.add_argument("-i", "--info", action="store_true", help="Show info on liquidation auction bid")
     upkeep_vaults_recover_parser = upkeep_vaults_subparsers.add_parser(
         "recover", help="Recover bad debt", description="Recovers bad debt from a collateral vault."
     )
@@ -590,9 +586,9 @@ async def cli():
     bills_implement_subparser.add_argument(
         "coin_name", nargs="?", default=None, type=str, help="[optional] Coin name of bill to implement"
     )
-    bills_implement_subparser.add_argument(
-        "-i", "--info", action="store_true", help="Show info on when next bill can be implemented"
-    )
+    #bills_implement_subparser.add_argument(
+    #    "-i", "--info", action="store_true", help="Show info on when next bill can be implemented"
+    #)
 
     ## reset ##
     bills_reset_subparser = bills_subparsers.add_parser(

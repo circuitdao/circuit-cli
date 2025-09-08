@@ -1267,7 +1267,7 @@ class CircuitRPCClient:
     async def upkeep_recharge_bid(
         self,
         coin_name,
-        BYC_amount=None,
+        amount=None,
         crt=None,
         target_puzzle_hash=None,
         info=False,
@@ -1276,17 +1276,18 @@ class CircuitRPCClient:
 
         Args:
             coin_name: The recharge auction coin to bid on.
-            BYC_amount: Amount of BYC to bid (float; converted to mCAT units).
+            amount: Amount of BYC to bid (float; converted to mCAT units).
             crt: Optional CRT amount to include (float; converted to mCAT units).
             target_puzzle_hash: Optional target puzzle hash for proceeds.
             info: If True, return only informational data without broadcasting.
         """
         args = {
-            "byc_amount": self._convert_number(BYC_amount, "MCAT"),
+            "byc_amount": self._convert_number(amount, "MCAT"),
             "crt_amount": self._convert_number(crt, "MCAT", ceil=True),
             "target_puzzle_hash": target_puzzle_hash,
             "info": info,
         }
+        print(f"{args=}")
         payload = self._build_transaction_payload({"operation": "bid", "args": args})
 
         if info:
@@ -1510,7 +1511,30 @@ class CircuitRPCClient:
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
 
-    async def upkeep_vaults_bid(self, coin_name, amount, max_bid_price=None):
+    async def upkeep_vaults_bid(self, coin_name, amount, max_bid_price=None, info=False):
+        """
+        Args:
+            info: If True, return info about the prospective toggle without sending a tx.
+        """
+        if info:
+            # For info requests, just make the API call without processing transaction
+            if amount is None:
+                response = await self.client.post(
+                    f"/vaults/{coin_name}/",
+                    json={},
+                )
+                data = response.json()
+                owed_to_initiator = data.get("initiator_incentive_balance") or 0
+                amount = data["debt_owed_to_vault"] + owed_to_initiator
+
+            payload = self._build_base_payload(
+                vault_name=coin_name,
+                amount=self._convert_number(amount, "MCAT"),
+                info=info,
+            )
+            return await self._make_api_request("POST", "/vaults/bid_auction", payload)
+
+        assert amount is not None, "Must specify amount to bid"
         keeper_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
         response = await self.client.post(
@@ -1518,9 +1542,10 @@ class CircuitRPCClient:
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "vault_name": coin_name,
-                "amount": self._convert_number(amount, "MCAT"),  # floor(amount * self.consts["MCAT"]),
+                "amount": self._convert_number(amount, "MCAT"),
                 "max_bid_price": self._convert_number(max_bid_price, "PRICE"),
                 "target_puzzle_hash": keeper_puzzle_hash,
+                "info": info,
                 "fee_per_cost": self.fee_per_cost,
             },
             headers={"Content-Type": "application/json"},
@@ -1689,8 +1714,8 @@ class CircuitRPCClient:
                 data[f"proposals.propose.coins.{label}"] = new_proposal_coin.name().hex()
         return tx_result
 
-    async def bills_implement(self, coin_name=None, info=False):
-        if coin_name is None or info:
+    async def bills_implement(self, coin_name=None): #, info=False):
+        if coin_name is None: # or info:
             payload = self._build_base_payload(include_spent_coins=False, empty_only=False, non_empty_only=True)
             data: list = await self._make_api_request("POST", "/bills", payload)
 
@@ -1702,7 +1727,8 @@ class CircuitRPCClient:
                 assert len(coins) > 0, "There are no proposed bills"
                 assert coins[0]["status"]["implementable_in"] <= 0, "No implementable bill found"
                 coin_name = coins[0]["name"]
-            return coins
+            #if info:
+            #    return coins
         else:
             if coin_name.startswith("<") and coin_name.endswith(">"):
                 label = coin_name[1:-1]

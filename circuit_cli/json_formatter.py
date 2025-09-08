@@ -17,12 +17,12 @@ class CircuitJSONFormatter:
     def __init__(self, use_color: bool | None = None):
         # Common field patterns for different types of values
         self.amount_patterns = [
-            r".*amount.*",
-            r".*balance.*",
+            #r".*amount.*",
+            #r".*_balance.*",
             r".*deposit.*",
-            r".*value.*",
-            r".*min_.*",
-            r".*max_.*",
+            #r".*value.*",
+            #r".*min_.*",
+            #r".*max_.*",
             r".*threshold.*",
         ]
 
@@ -31,16 +31,24 @@ class CircuitJSONFormatter:
             r".*byc.*",
             r"^(?!.*\b(in_bad_debt)\b).*debt.*",
             r".*principal.*",
-            r".*stability_fee.*",
+            r"^recharge_auction_(minimum|maximum)_bid$",
+            r"^(?!.*df.*).*stability_fee.*", #r".*stability_fee.*",
+            r"^surplus_auction_lot$",
+            r".*treasury_(delta|minimum|maximum).*",
+            r"^vault_auction_minimum_bid_flat$",
+            r"^vault_initiator_incentive_flat_fee$",
+            r"^(min|max)_coin_amount$",
+            r"^treasury_balance$",
         ]
 
         self.crt_patterns = [
-            r".*crt.*",
+            r"^announcer_rewards_per_interval$",
+            r"^(?!(.*crt_price.*)).*crt.*",
         ]
 
         self.xch_patterns = [
             r"^(?!.*\b(collateral_ratio)\b).*collateral.*",
-            r".*fee.*",
+            r"^(?!.*(stability|initiator).*).*fee.*",
             r".*withdraw.*",
             r".*xch.*",
         ]
@@ -56,10 +64,19 @@ class CircuitJSONFormatter:
         ]
 
         self.price_patterns = [
-            r"^(?!(.*PRICE_PRECISION.*|.*price_ttl.*|.*price_update.*)).*price.*",
+            r"^(?!(.*PRICE_PRECISION.*|.*crt_price.*|.*price_ttl.*|.*price_update.*|.*price_delay.*|.*price_factor.*|.*_bps$)).*price.*",
+        ]
+
+        self.crt_price_patterns = [
+            r".*crt_price.*",
+        ]
+
+        self.price_info_patterns = [
+            r".*price_info.*",
         ]
 
         self.timestamp_patterns = [
+            r".*cutoff.*",
             r".*timestamp.*",
             r".*time.*",
             #r".*created_at.*",
@@ -71,10 +88,11 @@ class CircuitJSONFormatter:
         ]
 
         self.timeperiod_patterns = [
-            r".*delay.*",
             r".*_in$",
-            r".*time_until.*",
-            r".*ttl.*",
+            r".*delay.*",
+            r"^(?!(^announcer_rewards.*|.*_bps$)).*interval.*",
+            r".*time_(until|to).*",
+            r"^(?!(.*settle.*)).*ttl.*",
         ]
 
         self.hex_patterns = [
@@ -85,13 +103,23 @@ class CircuitJSONFormatter:
             r".*public_key.*"
         ]
 
-        self.percentage_patterns = [
+        self.ratio_patterns = [
             r".*ratio.*",
+        ]
+
+        self.pct_patterns = [
+            r".*pct.*",
         ]
 
         self.bps_patterns = [
             r".*bps.*",
+            r"^vault_auction_starting_price_factor$",
         ]
+
+        #self.bool_patterns = [
+        #    r".*can_be.*",
+        #    r".*is_.*",
+        #]
 
         # Mojos per XCH (standard Chia conversion)
         self.MOJOS_PER_XCH = 1_000_000_000_000
@@ -176,14 +204,29 @@ class CircuitJSONFormatter:
             lines.append("")
         return "\n".join(lines)
 
-    def _format_list(self, data: List[Any], indent: int = 0) -> str:
+    def _format_list(self, data: List[Any], indent: int = 0, key_lower: str = None) -> str:
         """Format a list with appropriate formatting."""
+        print(f"formatting list: {key_lower=} {data=}")
+
         if not data:
             return "[]"
 
         lines = []
         prefix = "  " * indent
         bullet = "•" if True else "-"
+
+        if key_lower is not None and self._matches_pattern(key_lower, self.price_info_patterns):
+            item = data
+            if isinstance(item[0], list):
+                for idx in range(len(item)):
+                    formatted_price_info = self._format_price_info(key_lower, item[idx])
+                    lines.append(f"{prefix}{idx}: {formatted_price_info[0]}")
+                    lines.append(f"{prefix}   {formatted_price_info[1]}")
+            else:
+                formatted_price_info = self._format_price_info(key_lower, item)
+                lines.append(f"{prefix} {formatted_price_info[0]}")
+                lines.append(f"{prefix} {formatted_price_info[1]}")
+            return "\n".join(lines)
 
         for i, item in enumerate(data):
             idx = f"[{i}]"
@@ -203,14 +246,14 @@ class CircuitJSONFormatter:
         if value is None:
             return "null"
 
+        # Handle primitive values with context-aware formatting
+        key_lower = key.lower()
+
         # Handle nested structures
         if isinstance(value, dict):
             return self._format_dict(value, indent)
         elif isinstance(value, list):
-            return self._format_list(value, indent)
-
-        # Handle primitive values with context-aware formatting
-        key_lower = key.lower()
+            return self._format_list(value, indent, key_lower)
 
         # Check for amount/balance fields
         if self._matches_pattern(key_lower, self.amount_patterns) and isinstance(value, (int, float)):
@@ -234,6 +277,11 @@ class CircuitJSONFormatter:
             print(f"{key_lower} is price")
             return self._format_price(key_lower, value)
 
+        # Check for crt price fields
+        if self._matches_pattern(key_lower, self.crt_price_patterns) and isinstance(value, int):
+            print(f"{key_lower} is crt price")
+            return self._format_crt_price(key_lower, value)
+
         # Check for address/hash fields
         if self._matches_pattern(key_lower, self.address_patterns) and isinstance(value, str):
             print(f"{key_lower} is address")
@@ -254,12 +302,17 @@ class CircuitJSONFormatter:
             print(f"{key_lower} is hex")
             return self._format_hex(value)
 
-        # Check for percentage field
-        if self._matches_pattern(key_lower, self.percentage_patterns) and isinstance(value, float):
-            print(f"{key_lower} is percentage")
-            return self._format_percentage(value)
+        # Check for ratio fields
+        if self._matches_pattern(key_lower, self.ratio_patterns) and isinstance(value, float):
+            print(f"{key_lower} is ratio")
+            return self._format_ratio(value)
 
-        # Check for basis points field
+        # Check for percentage points fields
+        if self._matches_pattern(key_lower, self.pct_patterns) and isinstance(value, int):
+            print(f"{key_lower} is percentage points")
+            return self._format_pct(value)
+
+        # Check for basis points fields
         if self._matches_pattern(key_lower, self.bps_patterns) and isinstance(value, int):
             print(f"{key_lower} is basis points")
             return self._format_bps(value)
@@ -298,7 +351,6 @@ class CircuitJSONFormatter:
 
     def _format_amount(self, key: str, value: Union[int, float]) -> str:
         """Format amount fields with appropriate units."""
-        #if "price" in key:
         if any(term in key for term in ["stability_fee", "principal", "debt", "borrow"]):
             aux = f"({value/self.MCAT_PRECISION:.3f} BYC)"
             if self.use_color and self.colors.get('dim'):
@@ -365,6 +417,18 @@ class CircuitJSONFormatter:
             aux = f"{self.colors['dim']}{aux}{self.colors['reset']}"
         return f"{value:,} XCH/¢USD {aux}"
 
+    def _format_crt_price(self, key: str, value: Union[int, float]) -> str:
+        """Format CRT price fields with appropriate units."""
+        aux = f"({value/10**10:.10f} CRT/BYC)"
+        if self.use_color and self.colors.get('dim'):
+            aux = f"{self.colors['dim']}{aux}{self.colors['reset']}"
+        return f"{value:,} dekaCRT/nanoBYC {aux}"
+
+    def _format_price_info(self, key: str, value: tuple[int, int]) -> str:
+        """Format price info fields with appropriate units."""
+        print(f"{value=}")
+        return self._format_price(key, value[0]), self._format_timestamp(value[1])
+
     def _format_address(self, value: str) -> str:
         """Format address/hash fields."""
         return value
@@ -398,14 +462,21 @@ class CircuitJSONFormatter:
             return f"{value[:10]}...{value[-10:]}"
         return value
 
-    def _format_percentage(self, value: float) -> str:
-        """Format percentage fields."""
+    def _format_ratio(self, value: float) -> str:
+        """Format ratio fields."""
         aux = f"({100*value:.2f}%)"
         if self.use_color and self.colors.get('dim'):
             aux = f"{self.colors['dim']}{aux}{self.colors['reset']}"
         return f"{value} {aux}"
 
-    def _format_bps(self, value: float) -> str:
+    def _format_pct(self, value: int) -> str:
+        """Format percentage points fields."""
+        aux = f"({value}%)"
+        if self.use_color and self.colors.get('dim'):
+            aux = f"{self.colors['dim']}{aux}{self.colors['reset']}"
+        return f"{value:,} pct {aux}"
+
+    def _format_bps(self, value: int) -> str:
         """Format basis points fields."""
         aux = f"({value/100.0}%)"
         if self.use_color and self.colors.get('dim'):
