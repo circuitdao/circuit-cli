@@ -206,7 +206,7 @@ class CircuitJSONFormatter:
 
     def _format_list(self, data: List[Any], indent: int = 0, key_lower: str = None) -> str:
         """Format a list with appropriate formatting."""
-        print(f"formatting list: {key_lower=} {data=}")
+        #print(f"formatting list: {key_lower=} {data=}")
 
         if not data:
             return "[]"
@@ -257,67 +257,67 @@ class CircuitJSONFormatter:
 
         # Check for amount/balance fields
         if self._matches_pattern(key_lower, self.amount_patterns) and isinstance(value, (int, float)):
-            print(f"{key_lower} is amount")
+            #print(f"{key_lower} is amount")
             return self._format_amount(key_lower, value)
 
         if self._matches_pattern(key_lower, self.byc_patterns) and isinstance(value, (int, float)):
-            print(f"{key_lower} is byc")
+            #print(f"{key_lower} is byc")
             return self._format_byc_amount(key_lower, value)
 
         if self._matches_pattern(key_lower, self.crt_patterns) and isinstance(value, (int, float)):
-            print(f"{key_lower} is crt")
+            #print(f"{key_lower} is crt")
             return self._format_crt_amount(key_lower, value)
 
         if self._matches_pattern(key_lower, self.xch_patterns) and isinstance(value, (int, float)):
-            print(f"{key_lower} is xch")
+            #print(f"{key_lower} is xch")
             return self._format_xch_amount(key_lower, value)
 
         # Check for price fields
         if self._matches_pattern(key_lower, self.price_patterns) and isinstance(value, (int, float)):
-            print(f"{key_lower} is price")
+            #print(f"{key_lower} is price")
             return self._format_price(key_lower, value)
 
         # Check for crt price fields
         if self._matches_pattern(key_lower, self.crt_price_patterns) and isinstance(value, int):
-            print(f"{key_lower} is crt price")
+            #print(f"{key_lower} is crt price")
             return self._format_crt_price(key_lower, value)
 
         # Check for address/hash fields
         if self._matches_pattern(key_lower, self.address_patterns) and isinstance(value, str):
-            print(f"{key_lower} is address")
+            #print(f"{key_lower} is address")
             return self._format_address(value)
 
         # Check for time period fields
         if self._matches_pattern(key_lower, self.timeperiod_patterns) and isinstance(value, (int, float)):
-            print(f"{key_lower} is time period")
+            #print(f"{key_lower} is time period")
             return self._format_timeperiod(value)
 
         # Check for timestamp fields
         if self._matches_pattern(key_lower, self.timestamp_patterns) and isinstance(value, (int, float)):
-            print(f"{key_lower} is timestamp")
+            #print(f"{key_lower} is timestamp")
             return self._format_timestamp(value)
 
         # Check for hex fields
         if self._matches_pattern(key_lower, self.hex_patterns) and isinstance(value, str):
-            print(f"{key_lower} is hex")
+            #print(f"{key_lower} is hex")
             return self._format_hex(value)
 
         # Check for ratio fields
         if self._matches_pattern(key_lower, self.ratio_patterns) and isinstance(value, float):
-            print(f"{key_lower} is ratio")
+            #print(f"{key_lower} is ratio")
             return self._format_ratio(value)
 
         # Check for percentage points fields
         if self._matches_pattern(key_lower, self.pct_patterns) and isinstance(value, int):
-            print(f"{key_lower} is percentage points")
+            #print(f"{key_lower} is percentage points")
             return self._format_pct(value)
 
         # Check for basis points fields
         if self._matches_pattern(key_lower, self.bps_patterns) and isinstance(value, int):
-            print(f"{key_lower} is basis points")
+            #print(f"{key_lower} is basis points")
             return self._format_bps(value)
 
-        print(f"{key_lower} is of some other type")
+        #print(f"{key_lower} is of some other type")
 
         # Handle boolean values
         if isinstance(value, bool):
@@ -426,7 +426,7 @@ class CircuitJSONFormatter:
 
     def _format_price_info(self, key: str, value: tuple[int, int]) -> str:
         """Format price info fields with appropriate units."""
-        print(f"{value=}")
+        #print(f"{value=}")
         return self._format_price(key, value[0]), self._format_timestamp(value[1])
 
     def _format_address(self, value: str) -> str:

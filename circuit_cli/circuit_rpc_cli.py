@@ -454,6 +454,14 @@ async def cli():
         "liquidate", help="Liquidate a vault", description="Starts or restarts a liquidation auction."
     )
     upkeep_vaults_liquidate_parser.add_argument("coin_name", type=str, help="Name of vault to liquidate")
+    upkeep_vaults_liquidate_parser.add_argument(
+        "-t",
+        "--target-puzzle-hash",
+        metavar="PUZZLE_HASH",
+        type=str,
+        default=None,
+        help="Puzzle hash to initiator incentive will be be paid. Default is first synthetic derived key of user's wallet",
+    )
     upkeep_vaults_bid_parser = upkeep_vaults_subparsers.add_parser(
         "bid", help="Bid in a liquidation auction", description="Submits a bid in a liquidation auction."
     )

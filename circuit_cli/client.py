@@ -1489,15 +1489,17 @@ class CircuitRPCClient:
         )
         return sig_response
 
-    async def upkeep_vaults_liquidate(self, coin_name):
-        keeper_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
+    async def upkeep_vaults_liquidate(self, coin_name, target_puzzle_hash=None):
+
+        if not target_puzzle_hash:
+            target_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
         response = await self.client.post(
             "/vaults/start_auction",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "vault_name": coin_name,
-                "initiator_puzzle_hash": keeper_puzzle_hash,
+                "initiator_puzzle_hash": target_puzzle_hash,
                 "fee_per_cost": self.fee_per_cost,
             },
             headers={"Content-Type": "application/json"},
