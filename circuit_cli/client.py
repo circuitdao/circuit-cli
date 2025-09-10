@@ -117,12 +117,12 @@ class CircuitRPCClient:
             synthetic_public_keys = []
         self.synthetic_secret_keys = synthetic_secret_keys
         self.synthetic_public_keys = synthetic_public_keys
-        if private_key:
-            log.info("Wallet first 5 addresses:")
-            log.info("Puzzle hash: %s", puzzle_hash_for_synthetic_public_key(synthetic_public_keys[0]))
-            log.info(
-                [encode_puzzle_hash(puzzle_hash_for_synthetic_public_key(x), "txch") for x in synthetic_public_keys[:5]]
-            )
+        #if private_key:
+        #    log.info("Wallet first 5 addresses:")
+        #    log.info("Puzzle hash: %s", puzzle_hash_for_synthetic_public_key(synthetic_public_keys[0]))
+        #    log.info(
+        #        [encode_puzzle_hash(puzzle_hash_for_synthetic_public_key(x), "txch") for x in synthetic_public_keys[:5]]
+        #    )
 
         self.consts = {
             "price_PRECISION": 1000000,  # Default 6 decimals
@@ -173,7 +173,7 @@ class CircuitRPCClient:
             fee_per_costs = response_data.get("fee_per_costs")
             self.fee_per_cost = fee_per_costs.get(self._fee_per_cost)
         else:
-            self.fee_per_cost = self._fee_per_cost
+            self.fee_per_cost = float(self._fee_per_cost)
         log.info("Set fee_per_cost to: %s", self.fee_per_cost)
 
     @property
