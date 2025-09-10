@@ -74,6 +74,46 @@ async def cli():
     upkeep_parser = subparsers.add_parser("upkeep", help="Commands to upkeep protocol and RPC server")
     upkeep_subparsers = upkeep_parser.add_subparsers(dest="action")
 
+    ## little liquidator
+    upkeep_little_liquidator_parser = upkeep_subparsers.add_parser(
+        "liquidator",
+        help="Little Liquidator - simple vault liquidation bot",
+        description="Monitors for any vaults that are ready to be liquidated and liquidates "
+                    "them if possible with optional profit-taking.",
+    )
+    upkeep_little_liquidator_parser.add_argument(
+        "--max-bid_amount", "-ma", type=int, required=False, help="Maximum bid amount"
+    )
+    upkeep_little_liquidator_parser.add_argument(
+        "--min-discount",
+        "-mpd",
+        type=float,
+        required=False,
+        help="Minimum price discount relative to market price to bid",
+    )
+    upkeep_little_liquidator_parser.add_argument("--run-once", action="store_true", help="Run the liquidator once and exit")
+    upkeep_little_liquidator_parser.add_argument(
+        "--max-offer-amount",
+        "-moa",
+        type=float,
+        default=1.0,
+        help="Maximum XCH amount per offer (for coin splitting)"
+    )
+    upkeep_little_liquidator_parser.add_argument(
+        "--offer-expiry-seconds",
+        "-oes",
+        type=int,
+        default=300,
+        help="Offer expiry time in seconds (default: 300)"
+    )
+    upkeep_little_liquidator_parser.add_argument(
+        "--current-time",
+        "-ct",
+        type=float,
+        default=None,
+        help="Override current time (epoch seconds) for testing. If omitted, uses system time."
+    )
+
     ## protocol info ##
     upkeep_subparsers.add_parser(
         "invariants",
@@ -874,28 +914,27 @@ async def cli():
         log_level = logging.DEBUG
     else:
         log_level = logging.WARNING
-    # Configure logging based on verbosity with improved formatting
+
+    # Configure logging
     root_logger = logging.getLogger()
-    # Clear existing handlers to avoid duplicates or prior configs
-    root_logger.handlers.clear()
     root_logger.setLevel(log_level)
 
-    # Stream handler with format depending on verbosity
-    handler = logging.StreamHandler()
-    if args.verbose:
-        formatter = logging.Formatter(
-            fmt="%(asctime)s | %(levelname).1s | %(name)s:%(lineno)d - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-    else:
-        formatter = logging.Formatter(fmt="%(levelname)s: %(message)s")
-    handler.setFormatter(formatter)
-    handler.setLevel(log_level)
-    root_logger.addHandler(handler)
+    # Add a handler only if one doesn't already exist (e.g. when running in pytest)
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        if args.verbose:
+            formatter = logging.Formatter(
+                fmt="%(asctime)s | %(levelname).1s | %(name)s:%(lineno)d - %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        else:
+            formatter = logging.Formatter(fmt="%(levelname)s: %(message)s")
+        handler.setFormatter(formatter)
+        handler.setLevel(log_level)
+        root_logger.addHandler(handler)
 
     # Tame noisy third-party loggers
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
     kwargs = dict([(k.lower(), v) for k, v in vars(args).items()])
     function_name = f"{args.command}_{args.action}"
@@ -927,6 +966,30 @@ async def cli():
         no_wait_for_tx=args.no_wait,
         dict_store_path=args.dd,
     )
+
+    if args.command == "upkeep" and args.action == "liquidator":
+        from circuit_cli.little_liquidator import LittleLiquidator
+
+        liquidator = LittleLiquidator(
+            rpc_client=rpc_client,
+            max_bid_amount=args.max_bid_amount,
+            min_discount=args.min_discount,
+            min_profit_threshold=getattr(args, 'min_profit_threshold', 0.02),
+            transaction_fee=getattr(args, 'transaction_fee', 0.001),
+            max_offer_amount=getattr(args, 'max_offer_amount', 1.0),
+            offer_expiry_seconds=getattr(args, 'offer_expiry_seconds', 300),
+            current_time=getattr(args, 'current_time', None),
+        )
+        if args.run_once:
+            result = await liquidator.process_once()
+            if args.json:
+                print(json.dumps(result))
+            else:
+                from circuit_cli.json_formatter import format_circuit_response
+                print(format_circuit_response(result))
+        else:
+            await liquidator.run(run_once=False)
+        return
 
     # In text mode, show which HTTP endpoints are being used
     try:
@@ -985,6 +1048,8 @@ async def cli():
         del kwargs["verbose"]
         del kwargs["progress"]
         del kwargs["dd"]
+        # Remove testing-only args if present
+        kwargs.pop("current_time", None)
         log.info(f"Calling {function_name} with {kwargs}")
         result = await getattr(rpc_client, f"{function_name}")(**kwargs)
         if args.json:

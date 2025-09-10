@@ -532,7 +532,7 @@ class CircuitRPCClient:
         )
         return await self._make_api_request("POST", "/wallet/addresses", payload)
 
-    async def wallet_balances(self):
+    async def wallet_balances(self, ignore_coin_names: list[str]=None):
         """
         Get wallet balances for XCH, BYC, and CRT coins.
 
@@ -552,7 +552,9 @@ class CircuitRPCClient:
             balances = client.wallet_balances()
             # Returns: {"xch_balance": 5000000000000, "byc_balance": 1500000, ...}
         """
-        payload = self._build_base_payload()
+        payload = self._build_base_payload(
+            ignore_coin_names=ignore_coin_names
+        )
         return await self._make_api_request("POST", "/balances", payload)
 
     async def wallet_coins(self, type=None):
@@ -1502,8 +1504,7 @@ class CircuitRPCClient:
             headers={"Content-Type": "application/json"},
         )
         if response.is_error:
-            print(response.content)
-            response.raise_for_status()
+            raise APIError(response.content)
         bundle: SpendBundle = SpendBundle.from_json_dict(response.json())
         sig_response = await self.sign_and_push(bundle)
         signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
@@ -1533,6 +1534,29 @@ class CircuitRPCClient:
         signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
+
+    async def wallet_split_coin(self, coin_name, amounts, target_puzzle_hashes=None):
+        """Split a coin into multiple coins, depending on amounts"""
+        payload = self._build_transaction_payload(
+            {'coin_name': coin_name, 'amounts': amounts, 'target_puzzle_hashes': target_puzzle_hashes}
+        )
+        return await self._process_transaction("/split_coin", payload)
+
+    async def offer_make(self, xch_amount: float, byc_amount: float, ignore_coin_names: list[str] = None):
+        """
+        Create an offer to trade assets.
+
+
+        """
+        payload = self._build_transaction_payload(
+            {
+                "byc_amount": self._convert_number(byc_amount, "MCAT"),
+                "xch_amount": self._convert_number(xch_amount, "MOJOS"),
+                "ignore_coin_names": ignore_coin_names,
+            }
+        )
+        resp =  await self._make_api_request("POST", "/make_offer", payload)
+        return resp
 
     async def upkeep_vaults_recover(self, coin_name):
         response = await self.client.post(
