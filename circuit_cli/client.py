@@ -19,6 +19,13 @@ from circuit_cli.persistence import DictStore
 log = logging.getLogger(__name__)
 
 
+def truncate_list(val, max_items=3):
+    """Truncate a list to a maximum number of items and append "..." if it exceeds the limit."""
+    if isinstance(val, list) and len(val) > max_items:
+        return f"[{', '.join(map(str, val[:max_items]))}... +{len(val) - max_items} more]"
+    return val
+
+
 def setup_console_logging():
     """Setup console-friendly logging for CLI usage.
 
@@ -167,7 +174,7 @@ class CircuitRPCClient:
             The resolved fee_per_cost value as an integer/float stored on self.fee_per_cost.
         """
         if self._fee_per_cost is None:
-            self.fee_per_cost = 0
+            self.fee_per_cost = 0.0
         elif self._fee_per_cost in ("fast", "medium"):
             response_data = await self._make_api_request("POST", "/statutes", {"full": False})
             fee_per_costs = response_data.get("fee_per_costs")
@@ -204,7 +211,12 @@ class CircuitRPCClient:
             ValueError: If an unsupported HTTP method is used.
         """
         try:
-            log.info(f"Making request to {method} {endpoint} with params {params} and json_data {json_data}")
+
+            # Truncate lists in params and json_data for logging
+            log_params = {k: truncate_list(v) for k, v in (params or {}).items()}
+            log_json = {k: truncate_list(v) for k, v in (json_data or {}).items()}
+
+            log.info(f"Making request to {method} {endpoint} with params {log_params} and json_data {log_json}")
             # Optional human-friendly endpoint trace in text mode
             if getattr(self, "show_endpoints", False):
                 try:
@@ -322,7 +334,7 @@ class CircuitRPCClient:
         Returns:
             Response from sign_and_push
         """
-        log.info("Processing transaction: %s", endpoint)
+        log.info("Processing transaction: %s%s", self.base_url, endpoint)
         # Make API request to get bundle
         response_data = await self._make_api_request("POST", endpoint, payload)
 
