@@ -3,6 +3,7 @@ import httpx
 import logging
 import logging.config
 import sys
+from copy import deepcopy
 from math import floor
 from typing import Optional, Dict, Any
 
@@ -1525,7 +1526,7 @@ class CircuitRPCClient:
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
 
-    async def upkeep_vaults_bid(self, coin_name, amount, max_bid_price=None, info=False):
+    async def upkeep_vaults_bid(self, coin_name, amount=None, max_bid_price=None, info=False):
         """
         Args:
             info: If True, return info about the prospective toggle without sending a tx.
@@ -1548,7 +1549,8 @@ class CircuitRPCClient:
             )
             return await self._make_api_request("POST", "/vaults/bid_auction", payload)
 
-        assert amount is not None, "Must specify amount to bid"
+        if amount is None or amount < 1:
+            raise ValueError("Must provide a positive bid amount")
         keeper_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
         response = await self.client.post(
