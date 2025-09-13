@@ -3,6 +3,7 @@ import httpx
 import logging
 import logging.config
 import sys
+from copy import deepcopy
 from math import floor
 from typing import Optional, Dict, Any
 
@@ -17,6 +18,13 @@ from circuit_cli.utils import generate_ssks, sign_spends
 from circuit_cli.persistence import DictStore
 
 log = logging.getLogger(__name__)
+
+
+def truncate_list(val, max_items=3):
+    """Truncate a list to a maximum number of items and append "..." if it exceeds the limit."""
+    if isinstance(val, list) and len(val) > max_items:
+        return f"[{', '.join(map(str, val[:max_items]))}... +{len(val) - max_items} more]"
+    return val
 
 
 def setup_console_logging():
@@ -117,12 +125,12 @@ class CircuitRPCClient:
             synthetic_public_keys = []
         self.synthetic_secret_keys = synthetic_secret_keys
         self.synthetic_public_keys = synthetic_public_keys
-        if private_key:
-            log.info("Wallet first 5 addresses:")
-            log.info("Puzzle hash: %s", puzzle_hash_for_synthetic_public_key(synthetic_public_keys[0]))
-            log.info(
-                [encode_puzzle_hash(puzzle_hash_for_synthetic_public_key(x), "txch") for x in synthetic_public_keys[:5]]
-            )
+        #if private_key:
+        #    log.info("Wallet first 5 addresses:")
+        #    log.info("Puzzle hash: %s", puzzle_hash_for_synthetic_public_key(synthetic_public_keys[0]))
+        #    log.info(
+        #        [encode_puzzle_hash(puzzle_hash_for_synthetic_public_key(x), "txch") for x in synthetic_public_keys[:5]]
+        #    )
 
         self.consts = {
             "price_PRECISION": 1000000,  # Default 6 decimals
@@ -167,13 +175,13 @@ class CircuitRPCClient:
             The resolved fee_per_cost value as an integer/float stored on self.fee_per_cost.
         """
         if self._fee_per_cost is None:
-            self.fee_per_cost = 0
+            self.fee_per_cost = 0.0
         elif self._fee_per_cost in ("fast", "medium"):
             response_data = await self._make_api_request("POST", "/statutes", {"full": False})
             fee_per_costs = response_data.get("fee_per_costs")
             self.fee_per_cost = fee_per_costs.get(self._fee_per_cost)
         else:
-            self.fee_per_cost = self._fee_per_cost
+            self.fee_per_cost = float(self._fee_per_cost)
         log.info("Set fee_per_cost to: %s", self.fee_per_cost)
 
     @property
@@ -204,7 +212,12 @@ class CircuitRPCClient:
             ValueError: If an unsupported HTTP method is used.
         """
         try:
-            log.info(f"Making request to {method} {endpoint} with params {params} and json_data {json_data}")
+
+            # Truncate lists in params and json_data for logging
+            log_params = {k: truncate_list(v) for k, v in (params or {}).items()}
+            log_json = {k: truncate_list(v) for k, v in (json_data or {}).items()}
+
+            log.info(f"Making request to {method} {endpoint} with params {log_params} and json_data {log_json}")
             # Optional human-friendly endpoint trace in text mode
             if getattr(self, "show_endpoints", False):
                 try:
@@ -322,7 +335,7 @@ class CircuitRPCClient:
         Returns:
             Response from sign_and_push
         """
-        log.info("Processing transaction: %s", endpoint)
+        log.info("Processing transaction: %s%s", self.base_url, endpoint)
         # Make API request to get bundle
         response_data = await self._make_api_request("POST", endpoint, payload)
 
@@ -1269,7 +1282,7 @@ class CircuitRPCClient:
     async def upkeep_recharge_bid(
         self,
         coin_name,
-        BYC_amount=None,
+        amount=None,
         crt=None,
         target_puzzle_hash=None,
         info=False,
@@ -1278,17 +1291,18 @@ class CircuitRPCClient:
 
         Args:
             coin_name: The recharge auction coin to bid on.
-            BYC_amount: Amount of BYC to bid (float; converted to mCAT units).
+            amount: Amount of BYC to bid (float; converted to mCAT units).
             crt: Optional CRT amount to include (float; converted to mCAT units).
             target_puzzle_hash: Optional target puzzle hash for proceeds.
             info: If True, return only informational data without broadcasting.
         """
         args = {
-            "byc_amount": self._convert_number(BYC_amount, "MCAT"),
+            "byc_amount": self._convert_number(amount, "MCAT"),
             "crt_amount": self._convert_number(crt, "MCAT", ceil=True),
             "target_puzzle_hash": target_puzzle_hash,
             "info": info,
         }
+        print(f"{args=}")
         payload = self._build_transaction_payload({"operation": "bid", "args": args})
 
         if info:
@@ -1490,15 +1504,17 @@ class CircuitRPCClient:
         )
         return sig_response
 
-    async def upkeep_vaults_liquidate(self, coin_name):
-        keeper_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
+    async def upkeep_vaults_liquidate(self, coin_name, target_puzzle_hash=None):
+
+        if not target_puzzle_hash:
+            target_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
         response = await self.client.post(
             "/vaults/start_auction",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "vault_name": coin_name,
-                "initiator_puzzle_hash": keeper_puzzle_hash,
+                "initiator_puzzle_hash": target_puzzle_hash,
                 "fee_per_cost": self.fee_per_cost,
             },
             headers={"Content-Type": "application/json"},
@@ -1511,7 +1527,31 @@ class CircuitRPCClient:
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
 
-    async def upkeep_vaults_bid(self, coin_name, amount, max_bid_price=None):
+    async def upkeep_vaults_bid(self, coin_name, amount=None, max_bid_price=None, info=False):
+        """
+        Args:
+            info: If True, return info about the prospective toggle without sending a tx.
+        """
+        if info:
+            # For info requests, just make the API call without processing transaction
+            if amount is None:
+                response = await self.client.post(
+                    f"/vaults/{coin_name}/",
+                    json={},
+                )
+                data = response.json()
+                owed_to_initiator = data.get("initiator_incentive_balance") or 0
+                amount = data["debt_owed_to_vault"] + owed_to_initiator
+
+            payload = self._build_base_payload(
+                vault_name=coin_name,
+                amount=self._convert_number(amount, "MCAT"),
+                info=info,
+            )
+            return await self._make_api_request("POST", "/vaults/bid_auction", payload)
+
+        if amount is None or amount < 1:
+            raise ValueError("Must provide a positive bid amount")
         keeper_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
         response = await self.client.post(
@@ -1519,9 +1559,10 @@ class CircuitRPCClient:
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "vault_name": coin_name,
-                "amount": self._convert_number(amount, "MCAT"),  # floor(amount * self.consts["MCAT"]),
+                "amount": self._convert_number(amount, "MCAT"),
                 "max_bid_price": self._convert_number(max_bid_price, "PRICE"),
                 "target_puzzle_hash": keeper_puzzle_hash,
+                "info": info,
                 "fee_per_cost": self.fee_per_cost,
             },
             headers={"Content-Type": "application/json"},
@@ -1713,8 +1754,8 @@ class CircuitRPCClient:
                 data[f"proposals.propose.coins.{label}"] = new_proposal_coin.name().hex()
         return tx_result
 
-    async def bills_implement(self, coin_name=None, info=False):
-        if coin_name is None or info:
+    async def bills_implement(self, coin_name=None): #, info=False):
+        if coin_name is None: # or info:
             payload = self._build_base_payload(include_spent_coins=False, empty_only=False, non_empty_only=True)
             data: list = await self._make_api_request("POST", "/bills", payload)
 
@@ -1726,7 +1767,8 @@ class CircuitRPCClient:
                 assert len(coins) > 0, "There are no proposed bills"
                 assert coins[0]["status"]["implementable_in"] <= 0, "No implementable bill found"
                 coin_name = coins[0]["name"]
-            return coins
+            #if info:
+            #    return coins
         else:
             if coin_name.startswith("<") and coin_name.endswith(">"):
                 label = coin_name[1:-1]
