@@ -1,15 +1,14 @@
 import argparse
 import asyncio
+import json
+import logging
 import os
 import sys
 
 import httpx
-import json
-
-
 from circuit_cli.client import CircuitRPCClient
-from circuit_cli.json_formatter import format_circuit_response
-import logging
+
+from circuit.drivers.protocol_math import MCAT
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +78,7 @@ async def cli():
         "liquidator",
         help="Little Liquidator - simple vault liquidation bot",
         description="Monitors for any vaults that are ready to be liquidated and liquidates "
-                    "them if possible with optional profit-taking.",
+        "them if possible with optional profit-taking.",
     )
     upkeep_little_liquidator_parser.add_argument(
         "--max-bid_amount", "-ma", type=int, required=False, help="Maximum bid amount"
@@ -91,27 +90,21 @@ async def cli():
         required=False,
         help="Minimum price discount relative to market price to bid",
     )
-    upkeep_little_liquidator_parser.add_argument("--run-once", action="store_true", help="Run the liquidator once and exit")
     upkeep_little_liquidator_parser.add_argument(
-        "--max-offer-amount",
-        "-moa",
-        type=float,
-        default=1.0,
-        help="Maximum XCH amount per offer (for coin splitting)"
+        "--run-once", action="store_true", help="Run the liquidator once and exit"
     )
     upkeep_little_liquidator_parser.add_argument(
-        "--offer-expiry-seconds",
-        "-oes",
-        type=int,
-        default=300,
-        help="Offer expiry time in seconds (default: 300)"
+        "--max-offer-amount", "-moa", type=float, default=1.0, help="Maximum XCH amount per offer (for coin splitting)"
+    )
+    upkeep_little_liquidator_parser.add_argument(
+        "--offer-expiry-seconds", "-oes", type=int, default=300, help="Offer expiry time in seconds (default: 300)"
     )
     upkeep_little_liquidator_parser.add_argument(
         "--current-time",
         "-ct",
         type=float,
         default=None,
-        help="Override current time (epoch seconds) for testing. If omitted, uses system time."
+        help="Override current time (epoch seconds) for testing. If omitted, uses system time.",
     )
 
     ## protocol info ##
@@ -347,7 +340,7 @@ async def cli():
     )
     upkeep_recharge_bid_parser.add_argument("coin_name", type=str, help="Name of recharge auction coin")
     upkeep_recharge_bid_parser.add_argument(
-        "amount", #"BYC_AMOUNT",
+        "amount",  # "BYC_AMOUNT",
         nargs="?",
         type=float,
         default=None,
@@ -468,16 +461,21 @@ async def cli():
         "list", help="List all vaults", description="Shows information on all collateral vaults."
     )
     upkeep_vaults_list_parser.add_argument(
-        "coin_name", nargs="?", type=str, default=None,
+        "coin_name",
+        nargs="?",
+        type=str,
+        default=None,
         help="[optional] Name of vault coin. If specified, info for only this vault is shown",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-s", "--seized", action="store_true", default=None,
-        help="Only list seized vaults (seized = in liquidation or bad debt)"
+        "-s",
+        "--seized",
+        action="store_true",
+        default=None,
+        help="Only list seized vaults (seized = in liquidation or bad debt)",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-n", "--not-seized", action="store_true", default=None,
-        help="Only list non-seized vaults"
+        "-n", "--not-seized", action="store_true", default=None, help="Only list non-seized vaults"
     )
     # LATER: add option for only listing liquidatable/in liquidation/restartable/in bad debt vaults
     # LATER: add -o/--ordered arg to order by outstanding SFs
@@ -487,7 +485,10 @@ async def cli():
         description="Transfers stability fees from specified collateral vault to treasury.",
     )
     upkeep_vaults_transfer_parser.add_argument(
-        "coin_name", nargs="?", type=str, default=None,
+        "coin_name",
+        nargs="?",
+        type=str,
+        default=None,
         help="[optional] Name of vault coin. If not specified, vault with greatest amount of SFs to transfer is selected",
     )
     upkeep_vaults_liquidate_parser = upkeep_vaults_subparsers.add_parser(
@@ -506,9 +507,15 @@ async def cli():
         "bid", help="Bid in a liquidation auction", description="Submits a bid in a liquidation auction."
     )
     upkeep_vaults_bid_parser.add_argument("coin_name", type=str, help="Name of vault in liquidation")
-    upkeep_vaults_bid_parser.add_argument("amount", nargs="?", type=float, default=None, help="Amount of BYC to bid. Optional if -i option is specified")
-    upkeep_vaults_bid_parser.add_argument("--max-bid-price", type=float, default=None, help="Maximum price for bid in XCH/BYC")
-    upkeep_vaults_bid_parser.add_argument("-i", "--info", action="store_true", help="Show info on liquidation auction bid")
+    upkeep_vaults_bid_parser.add_argument(
+        "amount", nargs="?", type=float, default=None, help="Amount of BYC to bid. Optional if -i option is specified"
+    )
+    upkeep_vaults_bid_parser.add_argument(
+        "--max-bid-price", type=float, default=None, help="Maximum price for bid in XCH/BYC"
+    )
+    upkeep_vaults_bid_parser.add_argument(
+        "-i", "--info", action="store_true", help="Show info on liquidation auction bid"
+    )
     upkeep_vaults_recover_parser = upkeep_vaults_subparsers.add_parser(
         "recover", help="Recover bad debt", description="Recovers bad debt from a collateral vault."
     )
@@ -634,9 +641,9 @@ async def cli():
     bills_implement_subparser.add_argument(
         "coin_name", nargs="?", default=None, type=str, help="[optional] Coin name of bill to implement"
     )
-    #bills_implement_subparser.add_argument(
+    # bills_implement_subparser.add_argument(
     #    "-i", "--info", action="store_true", help="Show info on when next bill can be implemented"
-    #)
+    # )
 
     ## reset ##
     bills_reset_subparser = bills_subparsers.add_parser(
@@ -976,13 +983,12 @@ async def cli():
 
         liquidator = LittleLiquidator(
             rpc_client=rpc_client,
-            max_bid_amount=args.max_bid_amount,
+            max_bid_milli_amount=args.max_bid_amount * MCAT if args.max_bid_amount else None,
             min_discount=args.min_discount,
-            min_profit_threshold=getattr(args, 'min_profit_threshold', 0.02),
-            transaction_fee=getattr(args, 'transaction_fee', 0.001),
-            max_offer_amount=getattr(args, 'max_offer_amount', 1.0),
-            offer_expiry_seconds=getattr(args, 'offer_expiry_seconds', 300),
-            current_time=getattr(args, 'current_time', None),
+            min_profit_threshold=getattr(args, "min_profit_threshold", 0.02),
+            max_offer_amount=getattr(args, "max_offer_amount", 1.0),
+            offer_expiry_seconds=getattr(args, "offer_expiry_seconds", 300),
+            current_time=getattr(args, "current_time", None),
         )
         if args.run_once:
             result = await liquidator.process_once()
@@ -990,6 +996,7 @@ async def cli():
                 print(json.dumps(result))
             else:
                 from circuit_cli.json_formatter import format_circuit_response
+
                 print(format_circuit_response(result))
         else:
             await liquidator.run(run_once=False)
