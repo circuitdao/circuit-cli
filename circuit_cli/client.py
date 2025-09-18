@@ -1,21 +1,18 @@
 import asyncio
-import httpx
 import logging
 import logging.config
 import sys
-from copy import deepcopy
 from math import floor
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
-from chia.util.bech32m import encode_puzzle_hash
+import httpx
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
     puzzle_hash_for_synthetic_public_key,
 )
-from chia_rs import PrivateKey, SpendBundle, Coin
-from httpx import AsyncClient
-
-from circuit_cli.utils import generate_ssks, sign_spends
+from chia_rs import Coin, PrivateKey, SpendBundle
 from circuit_cli.persistence import DictStore
+from circuit_cli.utils import generate_ssks, sign_spends
+from httpx import AsyncClient
 
 log = logging.getLogger(__name__)
 
@@ -570,7 +567,7 @@ class CircuitRPCClient:
         )
         return await self._make_api_request("POST", "/balances", payload)
 
-    async def wallet_coins(self, type=None):
+    async def wallet_coins(self, type=None, ignore_coin_names: list[str] = None):
         """
         Get detailed information about individual coins in the wallet.
 
@@ -598,8 +595,9 @@ class CircuitRPCClient:
         Example:
             coins_info = client.wallet_coins(type="xch")
             # Returns: {"coins": [...], "total_count": 5, "confirmed_count": 4}
+            :param ignore_coin_names:
         """
-        payload = self._build_base_payload(coin_type=type)
+        payload = self._build_base_payload(coin_type=type, ignore_coin_names=ignore_coin_names)
         return await self._make_api_request("POST", "/coins", payload)
 
     async def wallet_toggle(self, coin_name: str, info=False):
@@ -1568,8 +1566,7 @@ class CircuitRPCClient:
             headers={"Content-Type": "application/json"},
         )
         if response.is_error:
-            print(response.content)
-            response.raise_for_status()
+            raise APIError(response.content)
         bundle: SpendBundle = SpendBundle.from_json_dict(response.json())
         sig_response = await self.sign_and_push(bundle)
         signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
