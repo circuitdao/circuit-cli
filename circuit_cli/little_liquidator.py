@@ -1,15 +1,16 @@
 import asyncio
 import json
 import logging
-import math
 import time
 from pprint import pformat
 from typing import Dict
 
 import httpx
+from chia.wallet.trading.offer import Offer
+from chia_rs import SpendBundle
 from circuit_cli.client import APIError, CircuitRPCClient
 
-from circuit.drivers.protocol_math import PRICE_PRECISION
+from circuit.drivers.protocol_math import PRECISION_BPS, PRICE_PRECISION
 
 log = logging.getLogger(__name__)
 
@@ -142,7 +143,7 @@ class LittleLiquidator:
         min_profit_threshold: float = 0.02,  # Minimum 2% profit
         transaction_fee: float = 0.001,  # Estimated transaction fees
         max_offer_amount: float = 1.0,  # Maximum XCH amount per offer
-        offer_expiry_seconds: int = 3600,  # 1 hour offer expiry
+        offer_expiry_seconds: int = 600,  # 1 hour offer expiry
         current_time: float | None = None,  # testing: inject current time
     ):
         self.rpc_client = rpc_client
@@ -340,7 +341,7 @@ class LittleLiquidator:
         """Create a new offer at current market price"""
         try:
             # Price slightly below market for quick execution
-            offer_price = market_price * 0.995  # 0.5% below market
+            offer_price = market_price / PRICE_PRECISION * 0.995  # 0.5% below market
             byc_amount_to_receive = xch_amount * offer_price
 
             log.info(f"Creating market offer: {xch_amount} XCH for {byc_amount_to_receive:.2f} TBYC at {offer_price}")
@@ -350,19 +351,27 @@ class LittleLiquidator:
 
             # Create the offer via RPC, excluding locked coins
             offer_result = await self.rpc_client.offer_make(
-                xch_amount=xch_amount, byc_amount=byc_amount_to_receive, ignore_coin_names=ignore_coins
+                xch_amount=xch_amount,
+                byc_amount=byc_amount_to_receive,
+                ignore_coin_names=ignore_coins,
+                delay=self.offer_expiry_seconds,
             )
 
-            if offer_result and offer_result.get("offer_bech32"):
+            if offer_result and offer_result.get("bundle"):
                 # Lock the coins used in this offer
                 used_coins = offer_result.get("coins_used", [])
                 if used_coins:
                     await self._lock_coins(used_coins)
                     log.debug(f"Locked {len(used_coins)} coins for renewed offer")
 
+                # sign the offer bundle
+                unsigned_bundle = SpendBundle.from_json_dict(offer_result["offered_bundle"])
+                signed_bundle = await self.rpc_client.sign_bundle(unsigned_bundle)
+                unsigned_offer = Offer.from_spend_bundle(unsigned_bundle)
+                offer = Offer(unsigned_offer.requested_payments, signed_bundle, unsigned_offer.driver_dict)
                 # Upload to dexie.space
                 offer_data = {
-                    "offer": offer_result.get("offer_bech32", ""),
+                    "offer": offer.to_bech32(),
                     "requested": [{"asset_id": "TBYC", "amount": int(byc_amount_to_receive * 1000)}],
                     "offered": [{"asset_id": "TXCH", "amount": int(xch_amount * MOJOS)}],
                     "price": offer_price,
@@ -504,6 +513,7 @@ class LittleLiquidator:
                 "bad_debts_recovered": 0,
                 "auctions_restarted": 0,
                 "offers_renewed": 0,
+                "offers_created": [],
             },
             "current_state": {
                 "vaults_pending_liquidation": [],
@@ -562,8 +572,9 @@ class LittleLiquidator:
             log.debug("State after restarts: %s", pformat(state))
             # either bid or start, but not both in the same iteration to avoid block size issues
             if state.get("vaults_in_liquidation"):
-                bids_placed = await self.bid_on_auctions(state["vaults_in_liquidation"], balances)
-                result["actions_taken"]["bids_placed"] = bids_placed
+                bid_results = await self.bid_on_auctions(state["vaults_in_liquidation"], balances)
+                result["actions_taken"]["bids_placed"] = bid_results["bids_placed"]
+                result["actions_taken"]["offers_created"] = bid_results["offers_created"]
             elif state.get("vaults_pending_liquidation"):
                 auctions_started = await self.start_auctions(state["vaults_pending_liquidation"])
                 result["actions_taken"]["auctions_started"] = auctions_started
@@ -581,7 +592,7 @@ class LittleLiquidator:
             log.info("Starting auction for vault %s", vault_pending_name)
             try:
                 result = await self.rpc_client.upkeep_vaults_liquidate(
-                    coin_name=vault_pending_name,
+                    coin_name=vault_pending_name, ignore_coin_names=await self._get_ignore_coins()
                 )
                 log.info(f"Auction started for vault {vault_pending_name}: {result}")
                 auctions_started += 1
@@ -592,8 +603,12 @@ class LittleLiquidator:
     async def bid_on_auctions(self, vaults_in_liquidation, balances):
         log.info("Found vaults in liquidation: %s", vaults_in_liquidation)
         bids_placed = 0
+        offers_created = []
         current_balances = balances
-
+        statutes = await self.rpc_client.statutes_list(full=False)
+        log.debug("Statutes: %s", pformat(statutes))
+        min_bid_amount_bps = statutes["implemented_statutes"]["VAULT_AUCTION_MINIMUM_BID_BPS"]
+        min_bid_amount_flat = statutes["implemented_statutes"]["VAULT_AUCTION_MINIMUM_BID_FLAT"]
         for vault_in_liquidation in vaults_in_liquidation:
             vault_name = vault_in_liquidation["name"]
             vault_info = await self.rpc_client.upkeep_vaults_list(coin_name=vault_name, seized=True)
@@ -622,13 +637,15 @@ class LittleLiquidator:
                 f"Market conditions favorable - discount: {market_check['discount']:.2%}, "
                 f"market price: {market_check['market_price']}, auction price: {auction_price_per_xch}"
             )
-
-            if not self.has_sufficient_balance(current_balances):
+            mbyc_bid_amount = self.calculate_byc_bid_amount(
+                current_balances, vault_info, min_bid_amount_bps, min_bid_amount_flat
+            )
+            if mbyc_bid_amount < 0:
                 log.info("Insufficient balance to bid")
                 continue
 
             # Calculate bid amount
-            xch_to_acquire, mbyc_bid_amount = self.calculate_bid(available_xch, auction_price_per_xch)
+            xch_to_acquire = self.calculate_acquired_xch(mbyc_bid_amount, available_xch, auction_price_per_xch)
 
             # if bid amount is less than 1, then there's no need to bid
             if mbyc_bid_amount < 1:
@@ -645,10 +662,10 @@ class LittleLiquidator:
                     coin_name=vault_name,
                     amount=mbyc_bid_amount,
                     max_bid_price=auction_price_per_xch + 1,
+                    ignore_coin_names=await self._get_ignore_coins(),
                 )
                 log.info(f"Bid placed for vault {vault_name}: {result}")
                 bids_placed += 1
-
                 # Refresh balances after successful bid
                 ignore_coins = await self._get_ignore_coins()
                 current_balances = await self.rpc_client.wallet_balances(ignore_coin_names=ignore_coins)
@@ -673,6 +690,8 @@ class LittleLiquidator:
                 offer_result = await self.create_and_upload_offer(xch_to_acquire, market_check["market_price"])
                 if offer_result["success"]:
                     log.info(f"Successfully created offer for {xch_to_acquire / MOJOS} XCH")
+                    if offer_result.get("offer_bech32"):
+                        offers_created.append(offer_result["offer_bech32"])
                     if offer_result.get("dexie_id"):
                         log.info(f"Offer uploaded to dexie.space with ID: {offer_result['dexie_id']}")
                 else:
@@ -681,37 +700,27 @@ class LittleLiquidator:
             except APIError as e:
                 log.error("Failed to bid on auction for vault %s: %s", vault_name, e)
 
-        return bids_placed
+        return {"bids_placed": bids_placed, "offers_created": offers_created}
 
-    def has_sufficient_balance(self, balances):
+    def calculate_byc_bid_amount(self, balances, vault_info, min_bid_amount_bps, min_bid_amount_flat):
         # Support both possible keys used across code/tests
         byc_balance = balances.get("byc", balances.get("byc_balance", 0))
         # Determine required BYC to be able to bid up to max_bid_amount (in BYC units)
-        try:
-            required = (
-                float(self.max_bid_milli_amount) if self.max_bid_milli_amount and self.max_bid_milli_amount > 0 else 1.0
-            )
-        except Exception:
-            required = 1.0
+        vault_debt = vault_info["debt"]
+        # calculate minimum bid required by calculating relative and taking max out of it relative or flat
+        min_relative_bid_amount = (vault_debt * min_bid_amount_bps) / PRECISION_BPS
+        required = max(min_relative_bid_amount, min_bid_amount_flat)
         log.info(f"My TBYC balance: {byc_balance} | Required to bid up to max: {required}")
         if byc_balance < required:
             log.info("Not enough TBYC to bid up to max amount, skipping")
-            return False
-        return True
+            return -1
+        return min(byc_balance - required, self.max_bid_milli_amount)
 
-    def calculate_bid(self, available_xch, bid_price_per_xch):
+    def calculate_acquired_xch(self, byc_bid_amount, available_xch, bid_price_per_xch):
         log.debug(f"Calculating xch to acquire with params: {self.max_bid_milli_amount}, {bid_price_per_xch}")
-        xch_to_acquire = ((self.max_bid_milli_amount / 1000) / (bid_price_per_xch / 100)) * MOJOS
+        xch_to_acquire = ((byc_bid_amount / 1000) / (bid_price_per_xch / 100)) * MOJOS
         log.debug(f"XCH to acquire: {xch_to_acquire} vs available: {available_xch}")
-
-        if xch_to_acquire > available_xch:
-            byc_bid_amount = math.ceil((available_xch / MOJOS) * (bid_price_per_xch / 100) * 1000)
-            xch_to_acquire = available_xch
-            log.info(f"Not enough XCH to bid ({available_xch}), lowering bid amount to {byc_bid_amount}")
-        else:
-            byc_bid_amount = self.max_bid_milli_amount
-            log.info(f"Enough XCH to bid, bidding full amount: {byc_bid_amount}")
-        return xch_to_acquire, byc_bid_amount
+        return xch_to_acquire
 
     async def check_market_conditions(self, xch_to_acquire, auction_price_per_xch):
         """
@@ -776,7 +785,7 @@ class LittleLiquidator:
             xch_amount_in_whole = xch_amount / MOJOS
 
             # Price the offer competitively (slightly below market to ensure execution)
-            offer_price = market_price * 0.995  # 0.5% below market
+            offer_price = market_price / PRICE_PRECISION * 0.995  # 0.5% below market
             byc_amount_to_receive = xch_amount_in_whole * offer_price
 
             log.info(f"Creating offer: {xch_amount_in_whole} XCH for {byc_amount_to_receive:.2f} TBYC at {offer_price}")
@@ -790,20 +799,33 @@ class LittleLiquidator:
             )
             log.debug(f"Offer result: {offer_result}")
 
-            if offer_result and offer_result.get("offer_bech32"):
+            if offer_result and offer_result.get("bundle"):
                 # Lock the coins used in this offer
                 used_coins = offer_result.get("coins_used", [])
                 if used_coins:
                     await self._lock_coins(used_coins)
                     log.debug(f"Locked {len(used_coins)} coins for offer")
                 # Extract offer data for dexie upload
+                # sign the offer bundle
+                unsigned_bundle = SpendBundle.from_json_dict(offer_result["offered_bundle"])
+                signed_off_bundle = await self.rpc_client.sign_bundle(unsigned_bundle)
+                from chia_rs import G2Element
+
+                assert signed_off_bundle.aggregated_signature != G2Element()
+                offer_bundle = SpendBundle.from_json_dict(offer_result["bundle"])
+                unsigned_offer = Offer.from_spend_bundle(offer_bundle)
+                offer = Offer(unsigned_offer.requested_payments, signed_off_bundle, unsigned_offer.driver_dict)
+                log.debug(
+                    "Aggregated sig: %s (prev: %s)",
+                    offer.aggregated_signature(),
+                    signed_off_bundle.aggregated_signature,
+                )
                 offer_data = {
-                    "offer": offer_result.get("offer_bech32", ""),
+                    "offer": offer.to_bech32(),
                     "requested": [{"asset_id": "TBYC", "amount": int(byc_amount_to_receive)}],
                     "offered": [{"asset_id": "TXCH", "amount": xch_amount}],
                     "price": offer_price,
                 }
-
                 # Upload to dexie.space
                 upload_result = await upload_offer_to_dexie(offer_data)
                 current_time = self._now()
@@ -815,7 +837,7 @@ class LittleLiquidator:
                     # Add offer to active tracking
                     await self._add_active_offer(offer_id, xch_amount_in_whole, current_time, market_price)
 
-                    return {"success": True, "dexie_id": offer_id}
+                    return {"success": True, "dexie_id": offer_id, "offer_bech32": offer_data["offer"]}
                 else:
                     offer_id = f"local_{int(current_time)}"
                     log.warning("Failed to upload offer to dexie.space, but offer created locally")
@@ -823,7 +845,12 @@ class LittleLiquidator:
                     # Add offer to active tracking even if not uploaded
                     await self._add_active_offer(offer_id, xch_amount_in_whole, current_time, market_price)
 
-                    return {"success": True, "local_only": True, "offer_id": offer_id}
+                    return {
+                        "success": True,
+                        "local_only": True,
+                        "offer_id": offer_id,
+                        "offer_bech32": offer_data["offer"],
+                    }
             else:
                 log.error(f"Failed to create offer: {offer_result}")
                 return {"success": False}
@@ -906,7 +933,8 @@ class LittleLiquidator:
 
             log.info("Recovering bad debt for vault %s (debt: %s)", vault_name, vault_debt)
             try:
-                result = await self.rpc_client.upkeep_vaults_recover(vault_name)
+                ignore_coins = await self._get_ignore_coins()
+                result = await self.rpc_client.upkeep_vaults_recover(vault_name, ignore_coin_names=ignore_coins)
                 log.info(f"Recovered some debt for vault {vault_name}: {result}")
                 bad_debts_recovered += 1
             except APIError as e:

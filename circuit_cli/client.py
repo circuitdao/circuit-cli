@@ -9,6 +9,7 @@ import httpx
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
     puzzle_hash_for_synthetic_public_key,
 )
+from chia.wallet.trading.offer import Offer
 from chia_rs import Coin, PrivateKey, SpendBundle
 from circuit_cli.persistence import DictStore
 from circuit_cli.utils import generate_ssks, sign_spends
@@ -122,12 +123,6 @@ class CircuitRPCClient:
             synthetic_public_keys = []
         self.synthetic_secret_keys = synthetic_secret_keys
         self.synthetic_public_keys = synthetic_public_keys
-        #if private_key:
-        #    log.info("Wallet first 5 addresses:")
-        #    log.info("Puzzle hash: %s", puzzle_hash_for_synthetic_public_key(synthetic_public_keys[0]))
-        #    log.info(
-        #        [encode_puzzle_hash(puzzle_hash_for_synthetic_public_key(x), "txch") for x in synthetic_public_keys[:5]]
-        #    )
 
         self.consts = {
             "price_PRECISION": 1000000,  # Default 6 decimals
@@ -209,7 +204,6 @@ class CircuitRPCClient:
             ValueError: If an unsupported HTTP method is used.
         """
         try:
-
             # Truncate lists in params and json_data for logging
             log_params = {k: truncate_list(v) for k, v in (params or {}).items()}
             log_json = {k: truncate_list(v) for k, v in (json_data or {}).items()}
@@ -400,6 +394,7 @@ class CircuitRPCClient:
             - Otherwise, it returns True when done (backward compatible behavior).
         """
         if self.no_wait_for_confirmation:
+            log.info("Skipping confirmation wait because no_wait_for_confirmation is set")
             if stream:
                 # stream a single completion event for consistency
                 async def _gen():
@@ -498,7 +493,12 @@ class CircuitRPCClient:
         else:
             raise ValueError("Either bundle or number of blocks must be provided")
 
-    async def sign_and_push(self, bundle: SpendBundle, error_handling_info: dict = None):
+    async def sign_bundle(self, bundle: SpendBundle, error_handling_info: Optional[Dict[str, Any]] = None):
+        """Sign a SpendBundle locally."""
+        signed_bundle = await sign_spends(bundle.coin_spends, self.synthetic_secret_keys, add_data=self.add_sig_data)
+        return signed_bundle
+
+    async def sign_and_push(self, bundle: SpendBundle, error_handling_info: dict = None, sign=True):
         """Sign a SpendBundle locally and push it to the RPC service.
 
         Args:
@@ -511,11 +511,14 @@ class CircuitRPCClient:
         Raises:
             APIError: If the push fails (non-2xx response).
         """
-        signed_bundle = await sign_spends(
-            bundle.coin_spends,
-            self.synthetic_secret_keys,
-            add_data=self.add_sig_data,
-        )
+        if sign:
+            signed_bundle = await sign_spends(
+                bundle.coin_spends,
+                self.synthetic_secret_keys,
+                add_data=self.add_sig_data,
+            )
+        else:
+            signed_bundle = bundle
         assert isinstance(signed_bundle, SpendBundle)
         log.info("Signed bundle: %s, pushing", signed_bundle.name().hex())
         response = await self.client.post(
@@ -542,7 +545,7 @@ class CircuitRPCClient:
         )
         return await self._make_api_request("POST", "/wallet/addresses", payload)
 
-    async def wallet_balances(self, ignore_coin_names: list[str]=None):
+    async def wallet_balances(self, ignore_coin_names: list[str] = None):
         """
         Get wallet balances for XCH, BYC, and CRT coins.
 
@@ -562,9 +565,7 @@ class CircuitRPCClient:
             balances = client.wallet_balances()
             # Returns: {"xch_balance": 5000000000000, "byc_balance": 1500000, ...}
         """
-        payload = self._build_base_payload(
-            ignore_coin_names=ignore_coin_names
-        )
+        payload = self._build_base_payload(ignore_coin_names=ignore_coin_names)
         return await self._make_api_request("POST", "/balances", payload)
 
     async def wallet_coins(self, type=None, ignore_coin_names: list[str] = None):
@@ -1502,8 +1503,7 @@ class CircuitRPCClient:
         )
         return sig_response
 
-    async def upkeep_vaults_liquidate(self, coin_name, target_puzzle_hash=None):
-
+    async def upkeep_vaults_liquidate(self, coin_name, target_puzzle_hash=None, ignore_coin_names: list[str] = None):
         if not target_puzzle_hash:
             target_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
@@ -1514,6 +1514,7 @@ class CircuitRPCClient:
                 "vault_name": coin_name,
                 "initiator_puzzle_hash": target_puzzle_hash,
                 "fee_per_cost": self.fee_per_cost,
+                "ignore_coin_names": ignore_coin_names,
             },
             headers={"Content-Type": "application/json"},
         )
@@ -1525,7 +1526,9 @@ class CircuitRPCClient:
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
 
-    async def upkeep_vaults_bid(self, coin_name, amount=None, max_bid_price=None, info=False):
+    async def upkeep_vaults_bid(
+        self, coin_name, amount=None, max_bid_price=None, info=False, ignore_coin_names: list[str] = None
+    ):
         """
         Args:
             info: If True, return info about the prospective toggle without sending a tx.
@@ -1562,6 +1565,7 @@ class CircuitRPCClient:
                 "target_puzzle_hash": keeper_puzzle_hash,
                 "info": info,
                 "fee_per_cost": self.fee_per_cost,
+                "ignore_coin_names": ignore_coin_names,
             },
             headers={"Content-Type": "application/json"},
         )
@@ -1573,14 +1577,21 @@ class CircuitRPCClient:
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
 
-    async def wallet_split_coin(self, coin_name, amounts, target_puzzle_hashes=None):
+    async def wallet_split_coin(
+        self, coin_name, amounts, target_puzzle_hashes=None, ignore_coin_names: list[str] = None
+    ):
         """Split a coin into multiple coins, depending on amounts"""
         payload = self._build_transaction_payload(
-            {'coin_name': coin_name, 'amounts': amounts, 'target_puzzle_hashes': target_puzzle_hashes}
+            {
+                "coin_name": coin_name,
+                "amounts": amounts,
+                "target_puzzle_hashes": target_puzzle_hashes,
+                "ignore_coin_names": ignore_coin_names,
+            }
         )
         return await self._process_transaction("/split_coin", payload)
 
-    async def offer_make(self, xch_amount: float, byc_amount: float, ignore_coin_names: list[str] = None):
+    async def offer_make(self, xch_amount: float, byc_amount: float, ignore_coin_names: list[str] = None, delay=600):
         """
         Create an offer to trade assets.
 
@@ -1591,18 +1602,47 @@ class CircuitRPCClient:
                 "byc_amount": self._convert_number(byc_amount, "MCAT"),
                 "xch_amount": self._convert_number(xch_amount, "MOJOS"),
                 "ignore_coin_names": ignore_coin_names,
+                "delay": delay,
             }
         )
-        resp =  await self._make_api_request("POST", "/make_offer", payload)
+        resp = await self._make_api_request("POST", "/make_offer", payload)
         return resp
 
-    async def upkeep_vaults_recover(self, coin_name):
+    async def wallet_take_offer(self, offer_bech32: str):
+        """
+        Take an offer.
+
+        Args:
+            offer_bech32: The offer in bech32 format to take
+
+        Returns:
+            dict: Transaction response after signing, pushing, and confirming
+        """
+        payload = self._build_transaction_payload({"offer_bech32": offer_bech32})
+        taker_bundle_json = await self._make_api_request("POST", "/take_offer", payload)
+        # taker_offer = Offer.from_bech32(taker_bech32['offer'])
+        taker_bundle = SpendBundle.from_json_dict(taker_bundle_json)
+        signed_bundle = await self.sign_bundle(taker_bundle)
+        taker_offer = Offer.from_spend_bundle(
+            signed_bundle
+        )  # Offer(taker_offer.requested_payments, signed_bundle, taker_offer.driver_dict)
+        maker_offer = Offer.from_bech32(offer_bech32)
+        offer = Offer.aggregate([maker_offer, taker_offer])
+        log.debug("Full offer: %s", offer.summary())
+        valid_bundle = offer.to_valid_spend()
+        sig_response = await self.sign_and_push(valid_bundle, sign=False)
+        signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
+        await self.wait_for_confirmation(signed_bundle)
+        return signed_bundle.to_json_dict()
+
+    async def upkeep_vaults_recover(self, coin_name, ignore_coin_names=None):
         response = await self.client.post(
             "/vaults/recover_bad_debt",
             json={
                 "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "vault_name": coin_name,
                 "fee_per_cost": self.fee_per_cost,
+                "ignore_coin_names": ignore_coin_names,
             },
             headers={"Content-Type": "application/json"},
         )
@@ -1751,8 +1791,8 @@ class CircuitRPCClient:
                 data[f"proposals.propose.coins.{label}"] = new_proposal_coin.name().hex()
         return tx_result
 
-    async def bills_implement(self, coin_name=None): #, info=False):
-        if coin_name is None: # or info:
+    async def bills_implement(self, coin_name=None):  # , info=False):
+        if coin_name is None:  # or info:
             payload = self._build_base_payload(include_spent_coins=False, empty_only=False, non_empty_only=True)
             data: list = await self._make_api_request("POST", "/bills", payload)
 
@@ -1764,7 +1804,7 @@ class CircuitRPCClient:
                 assert len(coins) > 0, "There are no proposed bills"
                 assert coins[0]["status"]["implementable_in"] <= 0, "No implementable bill found"
                 coin_name = coins[0]["name"]
-            #if info:
+            # if info:
             #    return coins
         else:
             if coin_name.startswith("<") and coin_name.endswith(">"):

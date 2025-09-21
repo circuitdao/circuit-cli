@@ -81,7 +81,7 @@ async def cli():
         "them if possible with optional profit-taking.",
     )
     upkeep_little_liquidator_parser.add_argument(
-        "--max-bid_amount", "-ma", type=int, required=False, help="Maximum bid amount"
+        "--max-bid-amount", "-ma", type=int, required=False, help="Maximum bid amount"
     )
     upkeep_little_liquidator_parser.add_argument(
         "--min-discount",
@@ -97,7 +97,7 @@ async def cli():
         "--max-offer-amount", "-moa", type=float, default=1.0, help="Maximum XCH amount per offer (for coin splitting)"
     )
     upkeep_little_liquidator_parser.add_argument(
-        "--offer-expiry-seconds", "-oes", type=int, default=300, help="Offer expiry time in seconds (default: 300)"
+        "--offer-expiry-seconds", "-oes", type=int, default=600, help="Offer expiry time in seconds (default: 600)"
     )
     upkeep_little_liquidator_parser.add_argument(
         "--current-time",
@@ -705,6 +705,14 @@ async def cli():
     wallet_toggle_parser.add_argument("coin_name", type=str, help="Coin name")
     wallet_toggle_parser.add_argument("-i", "--info", action="store_true", help="Show info on toggling governance mode")
 
+    ## take-offer ##
+    wallet_take_offer_parser = wallet_subparsers.add_parser(
+        "take-offer",
+        help="Take an offer",
+        description="Take an existing Chia offer.",
+    )
+    wallet_take_offer_parser.add_argument("offer_bech32", type=str, help="The offer in bech32 format to take")
+
     ### ANNOUNCER ###
     announcer_parser = subparsers.add_parser("announcer", help="Announcer commands")
     announcer_subparsers = announcer_parser.add_subparsers(dest="action")
@@ -948,7 +956,13 @@ async def cli():
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     kwargs = dict([(k.lower(), v) for k, v in vars(args).items()])
-    function_name = f"{args.command}_{args.action}"
+    
+    # Handle case where action is None (e.g., "circuit-cli wallet" without subcommand)
+    if args.action is None:
+        parser.print_help()
+        return
+    
+    function_name = f"{args.command}_{args.action.replace('-', '_')}"
     try:
         # run commands method dynamically based on the parser command
         # Show immediate feedback in text mode while contacting the server
