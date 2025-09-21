@@ -145,6 +145,7 @@ class LittleLiquidator:
         max_offer_amount: float = 1.0,  # Maximum XCH amount per offer
         offer_expiry_seconds: int = 600,  # 1 hour offer expiry
         current_time: float | None = None,  # testing: inject current time
+        progress_handler=None,  # Progress handler for streaming updates
     ):
         self.rpc_client = rpc_client
         self.max_bid_milli_amount = max_bid_milli_amount
@@ -155,6 +156,18 @@ class LittleLiquidator:
         self.offer_expiry_seconds = offer_expiry_seconds
         # If provided, use injected time value for deterministic testing; otherwise use wall clock
         self._injected_current_time = current_time
+        self.progress_handler = progress_handler
+
+    async def _emit_progress(self, event_data: dict):
+        """Emit a progress event to the configured handler if set."""
+        if self.progress_handler:
+            try:
+                if asyncio.iscoroutinefunction(self.progress_handler):
+                    await self.progress_handler(event_data)
+                else:
+                    self.progress_handler(event_data)
+            except Exception as e:
+                log.debug(f"Progress handler raised exception: {e}")
 
     async def _get_locked_coins(self) -> Dict[str, float]:
         """Get locked coins from persistent storage"""
@@ -254,15 +267,18 @@ class LittleLiquidator:
         this method can be made to use injected current time via self._now().
         """
         try:
+            log.debug(f"Offer {offer_data} has expired: {offer_data['expires_at'] < now}")
             expires_at = offer_data.get("expires_at", 0)
             return now >= expires_at
         except Exception:
-            return now >= offer_data.get("expires_at", 0)
+            log.exception("Error checking offer expiry")
+            return True
 
     async def _manage_expired_offers(self):
         """Check for expired offers and recreate them with updated prices"""
         try:
             active_offers = await self._get_active_offers()
+            log.info(f"Found {len(active_offers)} active offers")
             current_time = self._now()
             expired_offers = []
 
@@ -473,8 +489,7 @@ class LittleLiquidator:
                         log.warning(f"Failed to split large coin: {e}")
 
         except Exception:
-            # log.warning(f"Error in coin splitting: {e}")
-            raise
+            log.exception("Error in coin splitting")
 
     async def run(self, run_once=False):
         log.info(
@@ -498,12 +513,18 @@ class LittleLiquidator:
             await self.process_once()
         except Exception as e:
             log.exception("Error processing liquidations: %s", e)
+            await self._emit_progress({"event": "error", "message": f"Error processing liquidations: {e}"})
+        
+        await self._emit_progress({"event": "waiting", "message": "Waiting 30 seconds for next upkeep cycle"})
         log.info("Waiting for next upkeep...")
         await asyncio.sleep(30)
 
     async def process_once(self):
         log.warning("Starting liquidator process...")
+        await self._emit_progress({"event": "started", "message": "Starting liquidation process"})
+        
         # fetch the latest fee per cost from the node
+        await self._emit_progress({"event": "status", "message": "Fetching fee per cost from node"})
         await self.rpc_client.set_fee_per_cost()
         result = {
             "status": "completed",
@@ -522,16 +543,27 @@ class LittleLiquidator:
             },
         }
 
+        await self._emit_progress({"event": "status", "message": "Fetching protocol state"})
         state = await self.rpc_client.upkeep_state(
             vaults=True, surplus_auctions=False, recharge_auctions=False, treasury=True, bills=False
         )
         if not state:
             log.warning("Failed to get protocol state")
+            await self._emit_progress({"event": "error", "message": "Failed to get protocol state"})
             result["status"] = "failed"
             result["error"] = "Failed to get protocol state"
             return result
 
         log.info("State: %s", pformat(state))
+        
+        # Emit progress with state summary
+        pending_count = len(state.get("vaults_pending_liquidation", []))
+        in_liquidation_count = len(state.get("vaults_in_liquidation", []))
+        bad_debt_count = len(state.get("vaults_with_bad_debt", []))
+        await self._emit_progress({
+            "event": "state_fetched", 
+            "message": f"State fetched - Pending: {pending_count}, In liquidation: {in_liquidation_count}, Bad debt: {bad_debt_count}"
+        })
 
         # Update the current state with vault information
         result["current_state"]["vaults_pending_liquidation"] = state.get("vaults_pending_liquidation", [])
@@ -572,16 +604,24 @@ class LittleLiquidator:
             log.debug("State after restarts: %s", pformat(state))
             # either bid or start, but not both in the same iteration to avoid block size issues
             if state.get("vaults_in_liquidation"):
+                await self._emit_progress({"event": "status", "message": f"Bidding on {len(state['vaults_in_liquidation'])} auctions"})
                 bid_results = await self.bid_on_auctions(state["vaults_in_liquidation"], balances)
                 result["actions_taken"]["bids_placed"] = bid_results["bids_placed"]
                 result["actions_taken"]["offers_created"] = bid_results["offers_created"]
+                await self._emit_progress({"event": "bids_completed", "message": f"Placed {bid_results['bids_placed']} bids, created {len(bid_results['offers_created'])} offers"})
             elif state.get("vaults_pending_liquidation"):
+                await self._emit_progress({"event": "status", "message": f"Starting auctions for {len(state['vaults_pending_liquidation'])} vaults"})
                 auctions_started = await self.start_auctions(state["vaults_pending_liquidation"])
                 result["actions_taken"]["auctions_started"] = auctions_started
+                await self._emit_progress({"event": "auctions_started", "message": f"Started {auctions_started} auctions"})
+            
             if state.get("vaults_with_bad_debt"):
+                await self._emit_progress({"event": "status", "message": f"Recovering bad debts for {len(state['vaults_with_bad_debt'])} vaults"})
                 bad_debts_recovered = await self.recover_bad_debts(state["vaults_with_bad_debt"], state)
                 result["actions_taken"]["bad_debts_recovered"] = bad_debts_recovered
+                await self._emit_progress({"event": "bad_debts_recovered", "message": f"Recovered {bad_debts_recovered} bad debts"})
 
+        await self._emit_progress({"event": "completed", "message": "Liquidation process completed", "done": True})
         return result
 
     async def start_auctions(self, vaults_pending):
@@ -694,6 +734,7 @@ class LittleLiquidator:
                         offers_created.append(offer_result["offer_bech32"])
                     if offer_result.get("dexie_id"):
                         log.info(f"Offer uploaded to dexie.space with ID: {offer_result['dexie_id']}")
+                    break
                 else:
                     log.error(f"Failed to create offer for acquired XCH: {offer_result}")
 
@@ -714,7 +755,7 @@ class LittleLiquidator:
         if byc_balance < required:
             log.info("Not enough TBYC to bid up to max amount, skipping")
             return -1
-        return min(byc_balance - required, self.max_bid_milli_amount)
+        return min(byc_balance - required, self.max_bid_milli_amount, vault_debt)
 
     def calculate_acquired_xch(self, byc_bid_amount, available_xch, bid_price_per_xch):
         log.debug(f"Calculating xch to acquire with params: {self.max_bid_milli_amount}, {bid_price_per_xch}")
@@ -751,22 +792,22 @@ class LittleLiquidator:
 
         # Convert market_price_ratio (TBYC/XCH) to market price (mTBYC/XCH) for comparison
         market_price_byc = (1 / market_price_ratio) * PRICE_PRECISION
-
+        auction_price_byc = (auction_price_per_xch / PRICE_PRECISION)
         # Calculate discount from market price
-        discount = (market_price_byc - auction_price_per_xch) / market_price_byc if market_price_byc > 0 else 0
+        discount = (market_price_byc - auction_price_byc) / market_price_byc if market_price_byc > 0 else 0
 
         # Check if discount meets our minimum threshold
         profitable = discount >= self.min_discount
 
         log.debug(
-            f"Market conditions: market_price_byc={market_price_byc}, auction_price={auction_price_per_xch}, discount={discount:.2%}, required={self.min_discount:.2%}, depth_ok=True"
+            f"Market conditions: market_price_byc={market_price_byc}, auction_price={auction_price_byc}, discount={discount:.2%}, required={self.min_discount:.2%}, depth_ok=True"
         )
 
         return {
             "profitable": profitable,
             "discount": discount,
             "market_price": market_price_byc,
-            "auction_price": auction_price_per_xch,
+            "auction_price": auction_price_byc,
             "has_sufficient_depth": True,
             "reason": "Sufficient discount and liquidity"
             if profitable
@@ -795,7 +836,10 @@ class LittleLiquidator:
 
             # Create the offer via RPC, excluding locked coins
             offer_result = await self.rpc_client.offer_make(
-                xch_amount=xch_amount_in_whole, byc_amount=byc_amount_to_receive, ignore_coin_names=ignore_coins
+                xch_amount=xch_amount_in_whole,
+                byc_amount=byc_amount_to_receive,
+                ignore_coin_names=ignore_coins,
+                delay=self.offer_expiry_seconds,
             )
             log.debug(f"Offer result: {offer_result}")
 

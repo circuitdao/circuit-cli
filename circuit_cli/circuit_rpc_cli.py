@@ -723,26 +723,6 @@ async def cli():
     )
     announcer_launch_parser.add_argument("price", type=float, help="Initial announcer price in USD per XCH")
 
-    ## fasttrack (launch + approve) ##
-    # This function is intended for test purposes and will not work in practice
-    announcer_fasttrack_parser = announcer_subparsers.add_parser(
-        "fasttrack",
-        help="Launch and approve an announcer",
-        description="Launches and approves or approves an announcer. Requires a governance coin with empty bill to be available.",
-    )
-    announcer_fasttrack_parser.add_argument(
-        "price",
-        nargs="?",
-        type=float,
-        default=None,
-        help="New announcer price in USD per XCH. Optional when using --launcher-id option",
-    )
-    announcer_fasttrack_parser.add_argument(
-        "--launcher-id",
-        type=str,
-        help="Announcer launcher ID. Specify when announcer has already been launched but not approved yet",
-    )
-
     ## show ##
     announcer_show_subparser = announcer_subparsers.add_parser(
         "show", help="Show information on announcer", description="Shows information on announcer."
@@ -995,6 +975,16 @@ async def cli():
     if args.command == "upkeep" and args.action == "liquidator":
         from circuit_cli.little_liquidator import LittleLiquidator
 
+        # Set up progress handler for liquidator
+        progress_handler = None
+        if args.progress != "off":
+            if args.progress == "json":
+                from circuit_cli.progress import make_json_progress_handler
+                progress_handler = make_json_progress_handler()
+            else:
+                from circuit_cli.progress import make_text_progress_handler
+                progress_handler = make_text_progress_handler()
+
         liquidator = LittleLiquidator(
             rpc_client=rpc_client,
             max_bid_milli_amount=args.max_bid_amount * MCAT if args.max_bid_amount else None,
@@ -1003,6 +993,7 @@ async def cli():
             max_offer_amount=getattr(args, "max_offer_amount", 1.0),
             offer_expiry_seconds=getattr(args, "offer_expiry_seconds", 300),
             current_time=getattr(args, "current_time", None),
+            progress_handler=progress_handler,
         )
         if args.run_once:
             result = await liquidator.process_once()
@@ -1080,6 +1071,7 @@ async def cli():
         if args.json:
             print(json.dumps(result))
         else:
+            from circuit_cli.json_formatter import format_circuit_response
             print(format_circuit_response(result))
     except (AttributeError, KeyError) as e:
         log.exception(f"Failed to run command: {e}")
