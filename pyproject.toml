@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "circuit-cli"
-version = "0.1.0"
+version = "0.9.0"
 description = "CLI tool to manage your Circuit collateral vault, savings and upkeep the protocol/DAO"
 authors = ["trepca <set@circuitdao.com>", "nimcon <nin@circuitdao.com>"]
 readme = "README.md"
