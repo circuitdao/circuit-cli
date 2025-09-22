@@ -43,8 +43,7 @@ async def cli():
         type=str,
         default=os.environ.get(
             "ADD_SIG_DATA",
-            "ccd5bb71183532bff220ba46c268991a3ff07eb358e8255a65c30a2dce0e5fbb",  # simulator0
-            # "37a90eb5185a9c4439a91ddc98bbadce7b4feba060d50116a067de66bf236615", # testnet11
+            "ccd5bb71183532bff220ba46c268991a3ff07eb358e8255a65c30a2dce0e5fbb",  # simulator0 & mainnet
         ),
         help="Additional signature data",
     )
@@ -69,6 +68,8 @@ async def cli():
         default=os.environ.get("CIRCUIT_CLI_PROGRESS", "text"),
         help="Stream progress while waiting for confirmations: 'off' (default), 'text' for human output, 'json' for JSONL events",
     )
+
+    #print(f"{ADD_SIG_DATA=}")
 
     ### UPKEEP ###
     upkeep_parser = subparsers.add_parser("upkeep", help="Commands to upkeep protocol and RPC server")
@@ -112,14 +113,14 @@ async def cli():
     upkeep_announcers_list_parser = upkeep_announcers_subparsers.add_parser(
         "list",
         help="List announcers",
-        description="Lists approved announcers. If coin_name is specified, info for only this one announcer will be shown, whether approved or not",
+        description="Lists approved announcers. If coin_name is specified, info for only this announcer will be shown, whether approved or not.",
     )
     upkeep_announcers_list_parser.add_argument(
         "coin_name",
         nargs="?",
         type=str,
         default=None,
-        help="[optional] Name of announcer coin. If specified, info for only this announcer is shown",
+        help="[optional] Name or launcher ID of announcer coin"
     )
     upkeep_announcers_list_parser.add_argument(
         "-p", "--penalizable", action="store_true", help="List penalizable announcers"
@@ -135,39 +136,36 @@ async def cli():
         help="Approve an announcer",
         description="Approves an announcer to be used for oracle price updates.",
     )
-    upkeep_announcers_approve_parser.add_argument("coin_name", type=str, help="Name of announcer")
+    upkeep_announcers_approve_parser.add_argument("coin_name", type=str, help="Name or launcher ID of announcer")
     upkeep_announcers_approve_parser.add_argument(
         "-c",
         "--create-conditions",
         action="store_true",
-        help="Create custom conditions for bill to approve the announcer",
+        help="Create custom conditions for bill to approve announcer",
     )
     upkeep_announcers_approve_parser.add_argument(
         "-b",
         "--bill-coin-name",
         type=str,
-        required=False,
-        default=None,
-        help="Bill name to implement previously proposed bill to approve the announcer.",
+        help="Implement previously proposed bill to approve announcer",
     )
     upkeep_announcers_disapprove_parser = upkeep_announcers_subparsers.add_parser(
         "disapprove",
         help="Disapprove an announcer",
         description="Disapproves an announcer so that it can no longer be used for oracle price updates.",
     )
-    upkeep_announcers_disapprove_parser.add_argument("coin_name", type=str, help="Name of announcer")
+    upkeep_announcers_disapprove_parser.add_argument("coin_name", type=str, help="Name or launcher ID of announcer")
     upkeep_announcers_disapprove_parser.add_argument(
         "-c",
         "--create-conditions",
         action="store_true",
-        help="Create custom conditions for bill to disapprove the announcer",
+        help="Create custom conditions for bill to disapprove announcer",
     )
     upkeep_announcers_disapprove_parser.add_argument(
         "-b",
         "--bill-coin-name",
         type=str,
-        default=None,
-        help="Implement previously proposed bill to disapprove the announcer. This option requires a govern bundle to be specified (-g option)",
+        help="Implement previously proposed bill to disapprove announcer",
     )
     upkeep_announcers_penalize_parser = upkeep_announcers_subparsers.add_parser(
         "penalize",
@@ -260,11 +258,8 @@ async def cli():
         "reward", help="Distribute CRT Rewards", description="Distributes CRT Rewards to registered Announcers."
     )
     upkeep_registry_reward_parser.add_argument(
-        "-t",
-        "--target-puzzle-hash",
-        type=str,
-        default=None,
-        help="Puzzle hash to which excess CRT Rewards not allocated to any announcer will be be paid. Default is first synthetic derived key of user's wallet",
+        "-t", "--target-puzzle-hash", metavar="PUZZLE_HASH", type=str,
+        help="Puzzle hash to which excess CRT Rewards not allocated to any announcer will be be paid. Default is first synthetic derived key",
     )
     upkeep_registry_reward_parser.add_argument(
         "-i", "--info", action="store_true", help="Show info on whether rewards can be distributed"
@@ -311,14 +306,14 @@ async def cli():
         nargs="?",
         type=float,
         default=None,
-        help="[optional] Amount of BYC to bid. Default is minimum amount.",
+        help="[optional] Amount of BYC to bid. Default is minimum amount",
     )
     upkeep_recharge_bid_parser.add_argument(
         "-crt",
         metavar="AMOUNT",
         type=float,
         default=None,
-        help="Amount of CRT to request. Default is max amount.",
+        help="Amount of CRT to request. Default is max amount",
     )
     upkeep_recharge_bid_parser.add_argument(
         "-t",
@@ -326,13 +321,13 @@ async def cli():
         metavar="PUZZLE_HASH",
         type=str,
         default=None,
-        help="Puzzle hash to which CRT is issued if bid wins auction. Default is puzzle hash of funding coin selected by driver.",
+        help="Puzzle hash to which CRT is issued if bid wins auction. Default is puzzle hash of funding coin selected by driver",
     )
     upkeep_recharge_bid_parser.add_argument(
         "-i",
         "--info",
         action="store_true",
-        help="Show info on a potential bid. If no intended BYC bid amount is specified, the minimum admissible amount is assumed.",
+        help="Show info on a potential bid. If no intended BYC bid amount is specified, the minimum admissible amount is assumed",
     )
     # settle
     upkeep_recharge_settle_parser = upkeep_recharge_subparsers.add_parser(
@@ -359,7 +354,7 @@ async def cli():
     )
     upkeep_surplus_bid_parser.add_argument("coin_name", type=str, help="Name of surplus auction coin")
     upkeep_surplus_bid_parser.add_argument(
-        "amount", nargs="?", type=float, default=None, help="Amount of CRT to bid. Optional when -i option is set."
+        "amount", nargs="?", type=float, default=None, help="Amount of CRT to bid. Optional when -i option is set"
     )
     upkeep_surplus_bid_parser.add_argument(
         "-t",
@@ -563,7 +558,7 @@ async def cli():
         help="Value of bill, ie Statute value or custom announcements. Omit to keep current value. Must be a Program in hex format if INDEX = -1, a 32-byte hex string if INDEX = 0, and an integer otherwise",
     )
     bills_propose_parser.add_argument(
-        "-id",
+        "-n",
         "--coin-name",
         default=None,
         type=str,
@@ -592,11 +587,9 @@ async def cli():
         "implement", help="Implement a bill into statute", description="Implement a bill."
     )
     bills_implement_subparser.add_argument(
-        "coin_name", nargs="?", default=None, type=str, help="[optional] Coin name of bill to implement"
+        "coin_name", nargs="?", default=None, type=str,
+        help="[optional] Coin name of bill to implement. Default is to implement bill that has been implementable longest"
     )
-    #bills_implement_subparser.add_argument(
-    #    "-i", "--info", action="store_true", help="Show info on when next bill can be implemented"
-    #)
 
     ## reset ##
     bills_reset_subparser = bills_subparsers.add_parser(
@@ -680,9 +673,10 @@ async def cli():
         nargs="?",
         type=float,
         default=None,
-        help="New announcer price in USD per XCH. Optional when using --launcher-id option",
+        help="New announcer price in USD per XCH. Optional when using -l option",
     )
     announcer_fasttrack_parser.add_argument(
+        "-l",
         "--launcher-id",
         type=str,
         help="Announcer launcher ID. Specify when announcer has already been launched but not approved yet",
@@ -763,6 +757,10 @@ async def cli():
         type=str,
         default=None,
         help="[optional] Announcer coin name. Only required if user owns more than one announcer",
+    )
+    announcer_register_parser.add_argument(
+        "-t", "--target-puzzle-hash", metavar="PUZZLE_HASH", type=str,
+        help="Inner puzzle hash to which CRT Rewards are paid. Default is announcer inner puzzle hash",
     )
 
     ## exit ##

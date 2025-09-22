@@ -83,14 +83,14 @@ class CircuitJSONFormatter:
             #r".*updated_at.*",
             #r".*expires_at.*",
             r"^\blast_price_update\b$",
-            r".*_at$",
+            r"^(?!.*(stability|initiator|distributable).*).*_at$",
             r".*deadline.*",
         ]
 
         self.timeperiod_patterns = [
             r".*_in$",
             r".*delay.*",
-            r"^(?!(^announcer_rewards.*|.*_bps$)).*interval.*",
+            r"^(?!(.*rewards_.*|^claim_.*|.*_bps$)).*interval.*",
             r".*time_(until|to).*",
             r"^(?!(.*settle.*)).*ttl.*",
         ]
@@ -206,14 +206,24 @@ class CircuitJSONFormatter:
 
     def _format_list(self, data: List[Any], indent: int = 0, key_lower: str = None) -> str:
         """Format a list with appropriate formatting."""
-        #print(f"formatting list: {key_lower=} {data=}")
-
         if not data:
             return "[]"
 
         lines = []
         prefix = "  " * indent
         bullet = "•" if True else "-"
+
+        if key_lower is not None and "implemented_statutes" in key_lower:
+            for i, name, value in data:
+                idx = f"[{i:02d}]"
+                if self.use_color and self.colors.get('dim'):
+                    idx = f"{self.colors['dim']}{idx}{self.colors['reset']}"
+                if key_lower == "implemented_statutes":
+                    lines.append(f"{prefix}{idx} - {name}: {self._format_value(name, value)}")
+                elif key_lower == "full_implemented_statutes":
+                    lines.append(f"{prefix}{idx} - {name}:")
+                    lines.append(f"{self._format_value(name, value, indent = indent + 2)}")
+            return "\n".join(lines)
 
         if key_lower is not None and self._matches_pattern(key_lower, self.price_info_patterns):
             item = data
@@ -514,9 +524,22 @@ class CircuitJSONFormatter:
     def _sort_keys(self, keys: List[str]) -> List[str]:
         """Sort keys to put most important ones first."""
         priority_keys = ["name", "id", "status", "balance", "amount", "address"]
+        constraint_keys = ["threshold_amount_to_propose", "veto_interval", "implementation_delay", "max_delta"]
 
         sorted_keys = []
         remaining_keys = list(keys)
+
+        if all(key in keys for key in constraint_keys):
+            # we are dealing with a statute
+            sorted_keys=[]
+            if "proposal_times" in keys:
+                sorted_keys.append("proposal_times")
+            if "statute_index" in keys:
+                sorted_keys.append("statute_index")
+            if "value" in keys:
+                sorted_keys.append("value")
+            sorted_keys.extend(constraint_keys)
+            return sorted_keys
 
         # Add priority keys first
         for priority_key in priority_keys:
