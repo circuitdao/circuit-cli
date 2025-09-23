@@ -213,17 +213,18 @@ class CircuitJSONFormatter:
         prefix = "  " * indent
         bullet = "•" if True else "-"
 
-        if key_lower is not None and "implemented_statutes" in key_lower:
-            for i, name, value in data:
-                idx = f"[{i:02d}]"
-                if self.use_color and self.colors.get('dim'):
-                    idx = f"{self.colors['dim']}{idx}{self.colors['reset']}"
-                if key_lower == "implemented_statutes":
-                    lines.append(f"{prefix}{idx} - {name}: {self._format_value(name, value)}")
-                elif key_lower == "full_implemented_statutes":
-                    lines.append(f"{prefix}{idx} - {name}:")
-                    lines.append(f"{self._format_value(name, value, indent = indent + 2)}")
-            return "\n".join(lines)
+        # LATER: uncommment below if we change (full_)implemented_statutes from dict to list of lists (idx, name, value)
+        #if key_lower is not None and "implemented_statutes" in key_lower:
+        #    for i, name, value in data:
+        #        idx = f"[{i:02d}]"
+        #        if self.use_color and self.colors.get('dim'):
+        #            idx = f"{self.colors['dim']}{idx}{self.colors['reset']}"
+        #        if key_lower == "implemented_statutes":
+        #            lines.append(f"{prefix}{idx} - {name}: {self._format_value(name, value)}")
+        #        elif key_lower == "full_implemented_statutes":
+        #            lines.append(f"{prefix}{idx} - {name}:")
+        #            lines.append(f"{self._format_value(name, value, indent = indent + 2)}")
+        #    return "\n".join(lines)
 
         if key_lower is not None and self._matches_pattern(key_lower, self.price_info_patterns):
             item = data
