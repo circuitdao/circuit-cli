@@ -892,7 +892,7 @@ class CircuitRPCClient:
         payload = self._build_transaction_payload({"operation": "configure", "args": args})
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
-    async def announcer_register(self, coin_name=None):
+    async def announcer_register(self, coin_name=None, target_puzzle_hash=None):
         """Register an announcer coin for participation.
 
         If coin_name is omitted and there is exactly one eligible announcer,
@@ -901,11 +901,12 @@ class CircuitRPCClient:
         coin_name = await self._get_coin_name_if_needed(
             coin_name, "/announcers", "No announcer found", payload_extras={"approved": True, "valid": True}
         )
-        payload = self._build_transaction_payload({"operation": "register", "args": {}})
+
+        payload = self._build_transaction_payload({"operation": "register", "args": {"target_puzzle_hash": target_puzzle_hash}})
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
     async def announcer_exit(self, coin_name):
-        """Exit (deactivate) a registered announcer coin.
+        """Exit announcer. Turns announcers back to a standard XCH coin.
 
         If coin_name is not provided and exactly one announcer exists, it will
         be selected automatically; otherwise pass the specific coin name.
@@ -994,6 +995,7 @@ class CircuitRPCClient:
             penalizable: Filter by penalizable state.
             incl_spent: Include spent coins in the listing.
         """
+
         if coin_name:
             payload = {
                 "coin_name": coin_name,
@@ -1016,7 +1018,8 @@ class CircuitRPCClient:
         """Release the store lock."""
         self.store.unlock()
 
-    async def upkeep_announcers_approve(self, coin_name, create_conditions=False, bill_coin_name=None, label=None):
+    async def upkeep_announcers_approve(self, coin_name=None, create_conditions=False, bill_coin_name=None, label=None):
+
         if create_conditions:
             assert bill_coin_name is None, "Cannot create custom conditions and implement bill at the same time"
             response = await self.client.post(
@@ -1213,7 +1216,7 @@ class CircuitRPCClient:
         """Distribute rewards from the registry to a target puzzle hash.
 
         Args:
-            target_puzzle_hash: Optional destination for rewards; if omitted the
+            target_puzzle_hash: Optional destination for excess rewards; if omitted the
                 default server behavior is used.
             info: If True, request only informational output without submitting a tx.
         """
@@ -1794,21 +1797,18 @@ class CircuitRPCClient:
                 data[f"proposals.propose.coins.{label}"] = new_proposal_coin.name().hex()
         return tx_result
 
-    async def bills_implement(self, coin_name=None):  # , info=False):
-        if coin_name is None:  # or info:
+    async def bills_implement(self, coin_name=None):
+        if coin_name is None:
             payload = self._build_base_payload(include_spent_coins=False, empty_only=False, non_empty_only=True)
             data: list = await self._make_api_request("POST", "/bills", payload)
 
             if coin_name:
                 coins = [coin for coin in data if coin["name"] == coin_name]
             else:
-                # LATER: verify that sorting works as intended when coins are human readable
                 coins = sorted(data, key=lambda x: x["status"]["implementable_in"])
                 assert len(coins) > 0, "There are no proposed bills"
                 assert coins[0]["status"]["implementable_in"] <= 0, "No implementable bill found"
                 coin_name = coins[0]["name"]
-            # if info:
-            #    return coins
         else:
             if coin_name.startswith("<") and coin_name.endswith(">"):
                 label = coin_name[1:-1]
