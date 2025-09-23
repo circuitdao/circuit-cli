@@ -8,8 +8,6 @@ import sys
 import httpx
 from circuit_cli.client import CircuitRPCClient
 
-#from circuit.drivers.protocol_math import MCAT
-
 log = logging.getLogger(__name__)
 
 
@@ -67,8 +65,6 @@ async def cli():
         default=os.environ.get("CIRCUIT_CLI_PROGRESS", "text"),
         help="Stream progress while waiting for confirmations: 'off' (default), 'text' for human output, 'json' for JSONL events",
     )
-
-    #print(f"{ADD_SIG_DATA=}")
 
     ### UPKEEP ###
     upkeep_parser = subparsers.add_parser("upkeep", help="Commands to upkeep protocol and RPC server")
@@ -156,10 +152,22 @@ async def cli():
         help="[optional] Name or launcher ID of announcer coin"
     )
     upkeep_announcers_list_parser.add_argument(
-        "-p", "--penalizable", action="store_true", help="List penalizable announcers"
+        "-v", "--valid", action="store_true", help="List valid announcers only (approved and not expired)"
     )
     upkeep_announcers_list_parser.add_argument(
-        "-v", "--valid", action="store_true", help="List valid announcers (approved and not expired)"
+        "-i", "--invalid", action="store_true", help="List invalid announcers only (approved and not expired)"
+    )
+    upkeep_announcers_list_parser.add_argument(
+        "-p", "--penalizable", action="store_true", help="List penalizable announcers only"
+    )
+    upkeep_announcers_list_parser.add_argument(
+        "-n", "--non-penalizable", action="store_true", help="List non-penalizable announcers only"
+    )
+    upkeep_announcers_list_parser.add_argument(
+        "-a", "--approved", action="store_true", help="List specified announcer only if approved"
+    )
+    upkeep_announcers_list_parser.add_argument(
+        "-u", "--unapproved", action="store_true", help="List specified announcer only if not approved"
     )
     upkeep_announcers_list_parser.add_argument(
         "--incl-spent", action="store_true", help="Include spent announcer coins"
@@ -724,10 +732,19 @@ async def cli():
         "-a", "--approved", action="store_true", help="Show announcer only if approved"
     )
     announcer_show_subparser.add_argument(
+        "-u", "--unapproved", action="store_true", help="Show announcer only if not approved"
+    )
+    announcer_show_subparser.add_argument(
         "-v", "--valid", action="store_true", help="Show announcer only if valid (approved and not expired)"
     )
     announcer_show_subparser.add_argument(
+        "-i", "--invalid", action="store_true", help="Show announcer only if invalid (expired or not approved)"
+    )
+    announcer_show_subparser.add_argument(
         "-p", "--penalizable", action="store_true", help="Show announcer only if penalizable"
+    )
+    announcer_show_subparser.add_argument(
+        "-n", "--non-penalizable", action="store_true", help="Show announcer only if non-penalizable"
     )
     announcer_show_subparser.add_argument("--incl-spent", action="store_true", help="Include spent announcer coins")
 
