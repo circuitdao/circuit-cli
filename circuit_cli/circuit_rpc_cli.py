@@ -8,7 +8,7 @@ import sys
 import httpx
 from circuit_cli.client import CircuitRPCClient
 
-from circuit.drivers.protocol_math import MCAT
+#from circuit.drivers.protocol_math import MCAT
 
 log = logging.getLogger(__name__)
 
@@ -933,12 +933,12 @@ async def cli():
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     kwargs = dict([(k.lower(), v) for k, v in vars(args).items()])
-    
+
     # Handle case where action is None (e.g., "circuit-cli wallet" without subcommand)
     if args.action is None:
         parser.print_help()
         return
-    
+
     function_name = f"{args.command}_{args.action.replace('-', '_')}"
     try:
         # run commands method dynamically based on the parser command
@@ -969,6 +969,16 @@ async def cli():
         dict_store_path=args.dd,
     )
 
+    response = await rpc_client.client.get("/protocol/constants")
+    response.raise_for_status()
+    data = response.json()
+    rpc_client.consts = {
+        "price_PRECISION": 10 ** data["xch_usd_price_decimals"],
+        "MOJOS": data["mojos_per_xch"],
+        "MCAT": 10 ** data["cat_decimals"],
+    }
+    log.info("Protocol constants loaded successfully")
+
     if args.command == "upkeep" and args.action == "liquidator":
         from circuit_cli.little_liquidator import LittleLiquidator
 
@@ -984,7 +994,7 @@ async def cli():
 
         liquidator = LittleLiquidator(
             rpc_client=rpc_client,
-            max_bid_milli_amount=args.max_bid_amount * MCAT if args.max_bid_amount else None,
+            max_bid_milli_amount=args.max_bid_amount * rpc_client.consts["MCAT"] if args.max_bid_amount else None,
             min_discount=args.min_discount,
             min_profit_threshold=getattr(args, "min_profit_threshold", 0.02),
             max_offer_amount=getattr(args, "max_offer_amount", 1.0),
@@ -1033,15 +1043,6 @@ async def cli():
                 _sys.stderr.flush()
         except Exception:
             pass
-        response = await rpc_client.client.get("/protocol/constants")
-        response.raise_for_status()
-        data = response.json()
-        rpc_client.consts = {
-            "price_PRECISION": 10 ** data["xch_usd_price_decimals"],
-            "MOJOS": data["mojos_per_xch"],
-            "MCAT": 10 ** data["cat_decimals"],
-        }
-        log.info("Protocol constants loaded successfully")
     except Exception as e:
         log.error(f"Failed to load protocol constants: {e}")
         log.warning("Using default constants - some functionality may be limited")
