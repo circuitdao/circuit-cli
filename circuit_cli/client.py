@@ -931,7 +931,7 @@ class CircuitRPCClient:
         it will be used automatically; otherwise an explicit coin_name is required.
         """
         coin_name = await self._get_coin_name_if_needed(
-            coin_name, "/announcers", "No valid announcer found", payload_extras={"approved": True, "valid": True}
+            coin_name, "/announcer", "No valid announcer found", payload_extras={"approved": True, "valid": True}
         )
 
         payload = self._build_transaction_payload({"operation": "register", "args": {"target_puzzle_hash": target_puzzle_hash}})
