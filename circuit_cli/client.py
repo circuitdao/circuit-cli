@@ -1224,13 +1224,11 @@ class CircuitRPCClient:
             if len(data) == 0:
                 return {"status": "failed", "error": "no penalizable announcer found"}
             coin_name = data[0]["name"]
-        else:
-            coin_name = coin_name
 
         response = await self.client.post(
             f"/announcers/{coin_name}/",
             json={
-                "synthetic_pks": [],
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "operation": "penalize",
                 "args": {},
                 "fee_per_cost": self.fee_per_cost,

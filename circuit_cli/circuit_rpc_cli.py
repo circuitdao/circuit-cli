@@ -220,7 +220,7 @@ async def cli():
         description="Penalizes an announcer.",
     )
     upkeep_announcers_penalize_parser.add_argument(
-        "coin_name", nargs="?", type=str, default=None, help="[optional] Name of announcer"
+        "coin_name", nargs="?", type=str, default=None, help="[optional] Name or launcher ID of announcer"
     )
 
     ## bills ##
