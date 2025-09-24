@@ -155,19 +155,25 @@ async def cli():
         "-v", "--valid", action="store_true", help="List valid announcers only (approved and not expired)"
     )
     upkeep_announcers_list_parser.add_argument(
-        "-i", "--invalid", action="store_true", help="List invalid announcers only (approved and not expired)"
+        "-nv", "--invalid", action="store_true", help="List invalid announcers only (approved and not expired)"
     )
     upkeep_announcers_list_parser.add_argument(
         "-p", "--penalizable", action="store_true", help="List penalizable announcers only"
     )
     upkeep_announcers_list_parser.add_argument(
-        "-n", "--non-penalizable", action="store_true", help="List non-penalizable announcers only"
+        "-np", "--non-penalizable", action="store_true", help="List non-penalizable announcers only"
+    )
+    upkeep_announcers_list_parser.add_argument(
+        "-r", "--registered", action="store_true", help="List registered announcers only"
+    )
+    upkeep_announcers_list_parser.add_argument(
+        "-nr", "--unregistered", action="store_true", help="List unregistered announcers only"
     )
     upkeep_announcers_list_parser.add_argument(
         "-a", "--approved", action="store_true", help="List specified announcer only if approved"
     )
     upkeep_announcers_list_parser.add_argument(
-        "-u", "--unapproved", action="store_true", help="List specified announcer only if not approved"
+        "-na", "--unapproved", action="store_true", help="List specified announcer only if not approved"
     )
     upkeep_announcers_list_parser.add_argument(
         "--incl-spent", action="store_true", help="Include spent announcer coins"
@@ -732,19 +738,25 @@ async def cli():
         "-a", "--approved", action="store_true", help="Show announcer only if approved"
     )
     announcer_show_subparser.add_argument(
-        "-u", "--unapproved", action="store_true", help="Show announcer only if not approved"
+        "-na", "--unapproved", action="store_true", help="Show announcer only if not approved"
     )
     announcer_show_subparser.add_argument(
         "-v", "--valid", action="store_true", help="Show announcer only if valid (approved and not expired)"
     )
     announcer_show_subparser.add_argument(
-        "-i", "--invalid", action="store_true", help="Show announcer only if invalid (expired or not approved)"
+        "-nv", "--invalid", action="store_true", help="Show announcer only if invalid (expired or not approved)"
     )
     announcer_show_subparser.add_argument(
         "-p", "--penalizable", action="store_true", help="Show announcer only if penalizable"
     )
     announcer_show_subparser.add_argument(
-        "-n", "--non-penalizable", action="store_true", help="Show announcer only if non-penalizable"
+        "-np", "--non-penalizable", action="store_true", help="Show announcer only if not penalizable"
+    )
+    announcer_show_subparser.add_argument(
+        "-r", "--registered", action="store_true", help="Show announcer only if registered"
+    )
+    announcer_show_subparser.add_argument(
+        "-nr", "--unregistered", action="store_true", help="Show announcer only if not registered"
     )
     announcer_show_subparser.add_argument("--incl-spent", action="store_true", help="Include spent announcer coins")
 

@@ -801,7 +801,8 @@ class CircuitRPCClient:
     ### ANNOUNCERS ###
     async def announcer_show(
             self, approved=False, unapproved=False, valid=False, invalid=False,
-            penalizable=False, non_penalizable=False, incl_spent=False
+            penalizable=False, non_penalizable=False, registered=False, unregistered=False,
+            incl_spent=False
     ):
         """List announcer coins with optional filters.
 
@@ -814,7 +815,12 @@ class CircuitRPCClient:
         Returns:
             A list of announcer coin records returned by the RPC service.
         """
-        if (approved and unapproved) or (valid and invalid) or (penalizable and non_penalizable):
+        if (
+                (approved and unapproved)
+                or (valid and invalid)
+                or (penalizable and non_penalizable)
+                or (registered and unregistered)
+        ):
             return []
         if not approved:
             if not unapproved:
@@ -831,8 +837,14 @@ class CircuitRPCClient:
                 penalizable = None
             else: penalizable = False
         else: penalizable = True
+        if not registered:
+            if not unregistered:
+                registered = None
+            else: registered = False
+        else: registered = True
+
         payload = self._build_base_payload(
-            approved=approved, valid=valid, penalizable=penalizable, include_spent_coins=incl_spent
+            approved=approved, valid=valid, penalizable=penalizable, registered=registered, include_spent_coins=incl_spent
         )
         data = await self._make_api_request("POST", "/announcer", payload)
         assert isinstance(data, list)
@@ -1012,7 +1024,8 @@ class CircuitRPCClient:
     ## Announcer ##
     async def upkeep_announcers_list(
         self, coin_name=None, approved=False, unapproved=False, valid=False, invalid=False,
-        penalizable=False, non_penalizable=False, incl_spent=False
+        penalizable=False, non_penalizable=False, registered=False, unregistered=False,
+        incl_spent=False
     ):
         """List announcers, optionally filtering and/or targeting a specific coin.
 
@@ -1023,7 +1036,12 @@ class CircuitRPCClient:
             penalizable: Filter by penalizable state.
             incl_spent: Include spent coins in the listing.
         """
-        if (approved and unapproved) or (valid and invalid) or (penalizable and non_penalizable):
+        if (
+                (approved and unapproved)
+                or (valid and invalid)
+                or (penalizable and non_penalizable)
+                or (registered and unregistered)
+        ):
             return []
         if not approved:
             if not unapproved:
@@ -1040,6 +1058,11 @@ class CircuitRPCClient:
                 penalizable = None
             else: penalizable = False
         else: penalizable = True
+        if not registered:
+            if not unregistered:
+                registered = None
+            else: registered = False
+        else: registered = True
 
         if coin_name:
             payload = {
@@ -1047,6 +1070,7 @@ class CircuitRPCClient:
                 "approved": approved,
                 "valid": valid,
                 "penalizable": penalizable,
+                "registered": registered,
                 "include_spent_coins": incl_spent,
             }
             return await self._make_api_request("POST", f"/announcers/{coin_name}", payload)
@@ -1058,6 +1082,7 @@ class CircuitRPCClient:
             "approved": True,
             "valid": valid,
             "penalizable": penalizable,
+            "registered": registered,
             "include_spent_coins": incl_spent,
         }
         return await self._make_api_request("POST", "/announcers", payload)
