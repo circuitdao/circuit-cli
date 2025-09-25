@@ -847,7 +847,11 @@ class CircuitRPCClient:
         return sig_response
 
     ### ANNOUNCERS ###
-    async def announcer_show(self, approved=False, valid=False, penalizable=False, incl_spent=False):
+    async def announcer_show(
+            self, approved=False, unapproved=False, valid=False, invalid=False,
+            penalizable=False, non_penalizable=False, registered=False, unregistered=False,
+            incl_spent=False
+    ):
         """List announcer coins with optional filters.
 
         Args:
@@ -859,8 +863,36 @@ class CircuitRPCClient:
         Returns:
             A list of announcer coin records returned by the RPC service.
         """
+        if (
+                (approved and unapproved)
+                or (valid and invalid)
+                or (penalizable and non_penalizable)
+                or (registered and unregistered)
+        ):
+            return []
+        if not approved:
+            if not unapproved:
+                approved = None
+            else: approved = False
+        else: approved = True
+        if not valid:
+            if not invalid:
+                valid = None
+            else: valid = False
+        else: valid = True
+        if not penalizable:
+            if not non_penalizable:
+                penalizable = None
+            else: penalizable = False
+        else: penalizable = True
+        if not registered:
+            if not unregistered:
+                registered = None
+            else: registered = False
+        else: registered = True
+
         payload = self._build_base_payload(
-            approved=approved, valid=valid, penalizable=penalizable, include_spent_coins=incl_spent
+            approved=approved, valid=valid, penalizable=penalizable, registered=registered, include_spent_coins=incl_spent
         )
         data = await self._make_api_request("POST", "/announcer", payload)
         assert isinstance(data, list)
@@ -940,25 +972,33 @@ class CircuitRPCClient:
         payload = self._build_transaction_payload({"operation": "configure", "args": args})
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
-    async def announcer_register(self, coin_name=None):
+    async def announcer_register(self, coin_name=None, target_puzzle_hash=None):
         """Register an announcer coin for participation.
 
         If coin_name is omitted and there is exactly one eligible announcer,
         it will be used automatically; otherwise an explicit coin_name is required.
         """
         coin_name = await self._get_coin_name_if_needed(
-            coin_name, "/announcers", "No announcer found", payload_extras={"approved": True, "valid": True}
+            coin_name, "/announcer", "No valid announcer found", payload_extras={"approved": True, "valid": True}
         )
-        payload = self._build_transaction_payload({"operation": "register", "args": {}})
+
+        payload = self._build_transaction_payload({"operation": "register", "args": {"target_puzzle_hash": target_puzzle_hash}})
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
     async def announcer_exit(self, coin_name):
-        """Exit (deactivate) a registered announcer coin.
+        """Exit announcer. Turns announcers back to a standard XCH coin.
 
         If coin_name is not provided and exactly one announcer exists, it will
         be selected automatically; otherwise pass the specific coin name.
         """
-        coin_name = await self._get_coin_name_if_needed(coin_name, "/announcers", "No announcer found")
+        try:
+            coin_name = await self._get_coin_name_if_needed(
+                coin_name, "/announcer", "No unapproved announcer found", payload_extras={"approved": False}
+            )
+        except AssertionError as err:
+            if "no unapproved announcer" in err.args[0].lower():
+                return "No unapproved Announcer found"
+            raise
         payload = self._build_transaction_payload({"operation": "exit", "args": {}})
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
@@ -1031,7 +1071,9 @@ class CircuitRPCClient:
 
     ## Announcer ##
     async def upkeep_announcers_list(
-        self, coin_name=None, approved=False, valid=False, penalizable=False, incl_spent=False
+        self, coin_name=None, approved=False, unapproved=False, valid=False, invalid=False,
+        penalizable=False, non_penalizable=False, registered=False, unregistered=False,
+        incl_spent=False
     ):
         """List announcers, optionally filtering and/or targeting a specific coin.
 
@@ -1042,20 +1084,53 @@ class CircuitRPCClient:
             penalizable: Filter by penalizable state.
             incl_spent: Include spent coins in the listing.
         """
+        if (
+                (approved and unapproved)
+                or (valid and invalid)
+                or (penalizable and non_penalizable)
+                or (registered and unregistered)
+        ):
+            return []
+        if not approved:
+            if not unapproved:
+                approved = None
+            else: approved = False
+        else: approved = True
+        if not valid:
+            if not invalid:
+                valid = None
+            else: valid = False
+        else: valid = True
+        if not penalizable:
+            if not non_penalizable:
+                penalizable = None
+            else: penalizable = False
+        else: penalizable = True
+        if not registered:
+            if not unregistered:
+                registered = None
+            else: registered = False
+        else: registered = True
+
         if coin_name:
             payload = {
                 "coin_name": coin_name,
                 "approved": approved,
                 "valid": valid,
                 "penalizable": penalizable,
+                "registered": registered,
                 "include_spent_coins": incl_spent,
             }
             return await self._make_api_request("POST", f"/announcers/{coin_name}", payload)
+
+        if approved == False:
+            return []
 
         payload = {
             "approved": True,
             "valid": valid,
             "penalizable": penalizable,
+            "registered": registered,
             "include_spent_coins": incl_spent,
         }
         return await self._make_api_request("POST", "/announcers", payload)
@@ -1064,7 +1139,8 @@ class CircuitRPCClient:
         """Release the store lock."""
         self.store.unlock()
 
-    async def upkeep_announcers_approve(self, coin_name, create_conditions=False, bill_coin_name=None, label=None):
+    async def upkeep_announcers_approve(self, coin_name=None, create_conditions=False, bill_coin_name=None, label=None):
+
         if create_conditions:
             assert bill_coin_name is None, "Cannot create custom conditions and implement bill at the same time"
             response = await self.client.post(
@@ -1196,13 +1272,11 @@ class CircuitRPCClient:
             if len(data) == 0:
                 return {"status": "failed", "error": "no penalizable announcer found"}
             coin_name = data[0]["name"]
-        else:
-            coin_name = coin_name
 
         response = await self.client.post(
             f"/announcers/{coin_name}/",
             json={
-                "synthetic_pks": [],
+                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
                 "operation": "penalize",
                 "args": {},
                 "fee_per_cost": self.fee_per_cost,
@@ -1261,7 +1335,7 @@ class CircuitRPCClient:
         """Distribute rewards from the registry to a target puzzle hash.
 
         Args:
-            target_puzzle_hash: Optional destination for rewards; if omitted the
+            target_puzzle_hash: Optional destination for excess rewards; if omitted the
                 default server behavior is used.
             info: If True, request only informational output without submitting a tx.
         """
@@ -1842,21 +1916,18 @@ class CircuitRPCClient:
                 data[f"proposals.propose.coins.{label}"] = new_proposal_coin.name().hex()
         return tx_result
 
-    async def bills_implement(self, coin_name=None):  # , info=False):
-        if coin_name is None:  # or info:
+    async def bills_implement(self, coin_name=None):
+        if coin_name is None:
             payload = self._build_base_payload(include_spent_coins=False, empty_only=False, non_empty_only=True)
             data: list = await self._make_api_request("POST", "/bills", payload)
 
             if coin_name:
                 coins = [coin for coin in data if coin["name"] == coin_name]
             else:
-                # LATER: verify that sorting works as intended when coins are human readable
                 coins = sorted(data, key=lambda x: x["status"]["implementable_in"])
                 assert len(coins) > 0, "There are no proposed bills"
                 assert coins[0]["status"]["implementable_in"] <= 0, "No implementable bill found"
                 coin_name = coins[0]["name"]
-            # if info:
-            #    return coins
         else:
             if coin_name.startswith("<") and coin_name.endswith(">"):
                 label = coin_name[1:-1]
