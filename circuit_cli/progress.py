@@ -11,7 +11,7 @@ These are extracted from inline definitions in circuit_rpc_cli.py to improve reu
 from __future__ import annotations
 
 import sys
-from typing import Callable, Dict, Any
+from typing import Any, Callable, Dict
 
 
 def make_json_progress_handler() -> Callable[[Dict[str, Any]], None]:
