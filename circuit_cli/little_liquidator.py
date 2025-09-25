@@ -10,7 +10,9 @@ from chia.wallet.trading.offer import Offer
 from chia_rs import SpendBundle
 from circuit_cli.client import APIError, CircuitRPCClient
 
-from circuit.drivers.protocol_math import PRECISION_BPS, PRICE_PRECISION
+PRECISION_BPS = 10**4
+PRICE_PRECISION = 10**2
+MCAT = 10**3
 
 log = logging.getLogger(__name__)
 
@@ -103,34 +105,71 @@ async def fetch_dexie_market_depth(pay_asset: str = "XCH", receive_asset: str = 
         return None
 
 
-async def upload_offer_to_dexie(offer_data: dict):
+async def upload_offer_to_dexie(offer_data: dict, progress_handler=None):
     """
     Upload a created offer to dexie.space marketplace.
 
     Args:
         offer_data: Dict containing offer details to upload
+        progress_handler: Optional progress handler for emitting events
 
     Returns:
         Dict with upload result or None on error
     """
-    import os
 
-    if os.getenv("VOLTECH_TESTING") == "1" or os.getenv("NO_DEXIE") == "1" or os.getenv("CI") == "true":
-        # In testing environments, avoid real network calls and return a stubbed success
-        log.debug("VOLTECH_TESTING/NO_DEXIE/CI set - skipping real Dexie upload and returning fake id")
-        return {"id": "test-offer-skip", "status": "ok", "stub": True}
+    # Helper function to emit progress if handler is available
+    async def emit_progress(event_data):
+        if progress_handler:
+            try:
+                if asyncio.iscoroutinefunction(progress_handler):
+                    await progress_handler(event_data)
+                else:
+                    progress_handler(event_data)
+            except Exception as e:
+                log.debug(f"Progress handler raised exception: {e}")
+
+    # Extract offer details for progress reporting
+
+    offer = Offer.from_bech32(offer_data["offer"])
+    await emit_progress(
+        {
+            "event": "dexie_upload_started",
+            "message": f"Uploading offer to Dexie - offering {offer.get_offered_amounts()} for {offer.get_requested_amounts()}",
+            "offer_details": offer.summary(),
+        }
+    )
 
     url = "https://api-testnet.dexie.space/v1/offers"
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
+
+    await emit_progress({"event": "dexie_upload_request", "message": "Sending offer to Dexie API", "url": url})
 
     async with httpx.AsyncClient(timeout=30) as http_client:
         try:
             resp = await http_client.post(url, json=offer_data, headers=headers)
             log.debug(f"Upload offer to Dexie response: {resp.status_code} {resp.content}")
             resp.raise_for_status()
-            return resp.json()
-        except Exception:
-            log.exception("Error uploading offer to Dexie")
+            result = resp.json()
+
+            await emit_progress(
+                {
+                    "event": "dexie_upload_success",
+                    "message": f"Successfully uploaded offer to Dexie with ID: {result.get('id', 'unknown')}",
+                    "dexie_id": result.get("id"),
+                    "response": result,
+                }
+            )
+
+            return result
+        except Exception as e:
+            log.exception(f"Error uploading offer to Dexie: {offer.summary()}")
+            await emit_progress(
+                {
+                    "event": "dexie_upload_failed",
+                    "message": f"Failed to upload offer to Dexie: {resp.content}",
+                    "error": str(e),
+                }
+            )
         return None
 
 
@@ -290,6 +329,14 @@ class LittleLiquidator:
                 return 0
 
             log.info(f"Found {len(expired_offers)} expired offers to renew")
+            await self._emit_progress(
+                {
+                    "event": "offer_renewal_started",
+                    "message": f"Starting renewal process for {len(expired_offers)} expired offers",
+                    "expired_offer_count": len(expired_offers),
+                    "total_active_offers": len(active_offers),
+                }
+            )
             renewed_count = 0
 
             for offer_id, offer_data in expired_offers:
@@ -297,7 +344,6 @@ class LittleLiquidator:
                     # Get current market price ratio (TBYC/XCH) and convert to mTBYC/XCH price
                     market_price_ratio = await fetch_dexie_price("XCH", "TBYC")
                     current_market_price = (1 / market_price_ratio) * PRICE_PRECISION if market_price_ratio else 0
-
                     if not current_market_price or current_market_price <= 0:
                         # Fall back to last known market price from offer creation in offline/test envs
                         fallback_price = offer_data.get("market_price_at_creation")
@@ -323,6 +369,17 @@ class LittleLiquidator:
                         f"Renewing expired offer {offer_id} (renewal #{renewal_count + 1}): {xch_amount} XCH at market price {current_market_price}"
                     )
 
+                    await self._emit_progress(
+                        {
+                            "event": "offer_renewal_attempt",
+                            "message": f"Renewing expired offer {offer_id} (renewal #{renewal_count + 1}) - {xch_amount} XCH at market price {current_market_price}",
+                            "offer_id": offer_id,
+                            "renewal_number": renewal_count + 1,
+                            "xch_amount": xch_amount,
+                            "market_price": current_market_price,
+                        }
+                    )
+
                     # Create new offer with current market conditions
                     result = await self._create_offer_at_market_price(xch_amount, current_market_price)
 
@@ -341,8 +398,29 @@ class LittleLiquidator:
 
                         renewed_count += 1
                         log.info(f"Successfully renewed offer as {new_offer_id}")
+                        await self._emit_progress(
+                            {
+                                "event": "offer_renewal_success",
+                                "message": f"Successfully renewed offer {offer_id} as {new_offer_id} - {xch_amount} XCH at updated market price",
+                                "old_offer_id": offer_id,
+                                "new_offer_id": new_offer_id,
+                                "renewal_number": renewal_count + 1,
+                                "xch_amount": xch_amount,
+                                "market_price": current_market_price,
+                            }
+                        )
                     else:
                         log.error(f"Failed to renew offer {offer_id}: {result}")
+                        await self._emit_progress(
+                            {
+                                "event": "offer_renewal_failed",
+                                "message": f"Failed to renew offer {offer_id} (renewal #{renewal_count + 1}) - {result}",
+                                "offer_id": offer_id,
+                                "renewal_number": renewal_count + 1,
+                                "xch_amount": xch_amount,
+                                "error": result.get("error", "Unknown error"),
+                            }
+                        )
 
                 except Exception as e:
                     log.error(f"Error renewing offer {offer_id}: {e}")
@@ -357,8 +435,21 @@ class LittleLiquidator:
         """Create a new offer at current market price"""
         try:
             # Price slightly below market for quick execution
-            offer_price = market_price / PRICE_PRECISION * 0.995  # 0.5% below market
+            offer_price = market_price * 0.995  # 0.5% below market
             byc_amount_to_receive = xch_amount * offer_price
+
+            await self._emit_progress(
+                {
+                    "event": "offer_creation_started",
+                    "message": f"Creating market offer - {xch_amount:.6f} XCH for {byc_amount_to_receive:.2f} TBYC at price {offer_price}",
+                    "offer_details": {
+                        "xch_amount": xch_amount,
+                        "byc_amount": byc_amount_to_receive,
+                        "offer_price": offer_price,
+                        "market_price": market_price,
+                    },
+                }
+            )
 
             log.info(f"Creating market offer: {xch_amount} XCH for {byc_amount_to_receive:.2f} TBYC at {offer_price}")
 
@@ -385,29 +476,91 @@ class LittleLiquidator:
                 signed_bundle = await self.rpc_client.sign_bundle(unsigned_bundle)
                 unsigned_offer = Offer.from_spend_bundle(unsigned_bundle)
                 offer = Offer(unsigned_offer.requested_payments, signed_bundle, unsigned_offer.driver_dict)
+                assert offer.is_valid()
                 # Upload to dexie.space
                 offer_data = {
                     "offer": offer.to_bech32(),
-                    "requested": [{"asset_id": "TBYC", "amount": int(byc_amount_to_receive * 1000)}],
-                    "offered": [{"asset_id": "TXCH", "amount": int(xch_amount * MOJOS)}],
-                    "price": offer_price,
                 }
 
-                upload_result = await upload_offer_to_dexie(offer_data)
+                await self._emit_progress(
+                    {
+                        "event": "offer_file_summary",
+                        "message": "Created offer file",
+                        "offer_details": offer.summary(),
+                    }
+                )
+                upload_result = await upload_offer_to_dexie(offer_data, self._emit_progress)
                 if upload_result:
                     offer_id = upload_result.get("id", f"local_{int(self._now())}")
                     log.info(f"Successfully uploaded renewed offer to dexie.space: {offer_id}")
+
+                    await self._emit_progress(
+                        {
+                            "event": "offer_creation_success",
+                            "message": f"Successfully created and uploaded market offer {offer_id} - {xch_amount:.6f} XCH for {byc_amount_to_receive:.2f} TBYC",
+                            "offer_id": offer_id,
+                            "dexie_upload": True,
+                            "offer_details": {
+                                "xch_amount": xch_amount,
+                                "byc_amount": byc_amount_to_receive,
+                                "offer_price": offer_price,
+                            },
+                        }
+                    )
+
                     return {"success": True, "offer_id": offer_id, "dexie_id": offer_id}
                 else:
                     offer_id = f"local_{int(self._now())}"
                     log.info("Renewed offer created locally but not uploaded to dexie.space")
-                    return {"success": True, "offer_id": offer_id, "local_only": True}
+
+                    await self._emit_progress(
+                        {
+                            "event": "offer_creation_partial_success",
+                            "message": f"Created market offer {offer_id} locally but failed to upload to Dexie - {xch_amount:.6f} XCH for {byc_amount_to_receive:.2f} TBYC",
+                            "offer_id": offer_id,
+                            "dexie_upload": False,
+                            "offer_details": {
+                                "xch_amount": xch_amount,
+                                "byc_amount": byc_amount_to_receive,
+                                "offer_price": offer_price,
+                            },
+                        }
+                    )
+
+                    return {"success": False, "offer_id": offer_id, "local_only": True}
             else:
                 log.error(f"Failed to create renewed offer: {offer_result}")
+
+                await self._emit_progress(
+                    {
+                        "event": "offer_creation_failed",
+                        "message": f"Failed to create market offer for {xch_amount:.6f} XCH - RPC call failed",
+                        "error": "Offer RPC creation failed",
+                        "offer_details": {
+                            "xch_amount": xch_amount,
+                            "byc_amount": byc_amount_to_receive,
+                            "offer_price": offer_price,
+                        },
+                    }
+                )
+
                 return {"success": False, "error": "Offer creation failed"}
 
         except Exception as e:
             log.exception(f"Failed to create renewed offer: {e}")
+
+            await self._emit_progress(
+                {
+                    "event": "offer_creation_failed",
+                    "message": f"Failed to create market offer for {xch_amount:.6f} XCH - {str(e)}",
+                    "error": str(e),
+                    "offer_details": {
+                        "xch_amount": xch_amount if "xch_amount" in locals() else 0,
+                        "target_byc_amount": byc_amount_to_receive if "byc_amount_to_receive" in locals() else 0,
+                    },
+                }
+            )
+
             return {"success": False, "error": str(e)}
 
     async def get_offers_status(self):
@@ -448,23 +601,79 @@ class LittleLiquidator:
             # Get current XCH coins, excluding locked ones
             coins = await self.rpc_client.wallet_coins(type="xch", ignore_coin_names=ignore_coins)
             if not coins:
+                await self._emit_progress(
+                    {"event": "coin_splitting_skipped", "message": "No XCH coins available for splitting"}
+                )
                 return
-            # Find coins larger than max_offer_amount
+
+            # Count existing small enough coins (suitable for offers without splitting)
+            small_enough_coins = [coin for coin in coins if coin.get("amount", 0) / MOJOS <= self.max_offer_amount]
+            small_coin_count = len(small_enough_coins)
+
+            # Skip splitting if we already have 5 or more small enough coins
+            if small_coin_count >= 5:
+                log.info(
+                    f"Skipping coin splitting: already have {small_coin_count} small enough coins (≤ {self.max_offer_amount} XCH)"
+                )
+                await self._emit_progress(
+                    {
+                        "event": "coin_splitting_skipped",
+                        "message": f"Coin splitting skipped - already have {small_coin_count} coins suitable for offers (≤ {self.max_offer_amount} XCH)",
+                        "small_coin_count": small_coin_count,
+                        "max_offer_amount": self.max_offer_amount,
+                    }
+                )
+                return
+            else:
+                log.info(f"Found {small_coin_count} small enough coins (≤ {self.max_offer_amount} XCH)")
+
+            # Find coins larger than max_offer_amount * 2
             large_coins = [coin for coin in coins if coin.get("amount", 0) / MOJOS > self.max_offer_amount * 2]
             if not large_coins:
                 log.info(f"No large coins found to split: {coins}")
+                await self._emit_progress(
+                    {
+                        "event": "coin_splitting_skipped",
+                        "message": f"No large coins found to split (threshold: {self.max_offer_amount * 2} XCH)",
+                        "total_coins": len(coins),
+                        "threshold": self.max_offer_amount * 2,
+                    }
+                )
                 return
+
             log.info(f"Found {len(large_coins)} large coins to split")
+            await self._emit_progress(
+                {
+                    "event": "coin_splitting_started",
+                    "message": f"Starting coin splitting process - found {len(large_coins)} large coins",
+                    "large_coin_count": len(large_coins),
+                    "small_coin_count": small_coin_count,
+                    "target_coin_size": self.max_offer_amount,
+                }
+            )
+
             mojos_per_chunk = self.max_offer_amount * MOJOS
             log.info(f"Mojos per chunk: {mojos_per_chunk} ({self.max_offer_amount})")
+
             for coin in large_coins:
                 coin_amount_xch = coin["amount"]
+                coin_amount_xch_float = coin_amount_xch / MOJOS
                 target_chunks = min(10, int(coin_amount_xch / mojos_per_chunk))
 
                 if target_chunks > 1:
                     log.info(
-                        f"Splitting large coin {coin['name']} ({coin_amount_xch / MOJOS} XCH) into {target_chunks} chunks"
+                        f"Splitting large coin {coin['name']} ({coin_amount_xch_float} XCH) into {target_chunks} chunks"
                     )
+                    await self._emit_progress(
+                        {
+                            "event": "coin_splitting",
+                            "message": f"Splitting coin {coin['name'][:8]}... ({coin_amount_xch_float:.6f} XCH) into {target_chunks} chunks",
+                            "coin_name": coin["name"],
+                            "coin_amount_xch": coin_amount_xch_float,
+                            "target_chunks": target_chunks,
+                        }
+                    )
+
                     mojos_per_chunk = int(coin_amount_xch / target_chunks)
                     # Create multiple outputs of max_offer_amount each
                     recipients = []
@@ -481,15 +690,43 @@ class LittleLiquidator:
                         # Send to multiple recipients to split the coin
                         result = await self.rpc_client.wallet_split_coin(coin["name"], amounts)
                         if result.get("status") == "success":
-                            log.info(f"Successfully broke coin into {len(recipients)} pieces")
+                            log.info(f"Successfully broke coin into {len(amounts)} pieces")
+                            await self._emit_progress(
+                                {
+                                    "event": "coin_split_success",
+                                    "message": f"Successfully split coin into {len(amounts)} pieces",
+                                    "coin_name": coin["name"],
+                                    "pieces_created": len(amounts),
+                                    "original_amount_xch": coin_amount_xch_float,
+                                }
+                            )
                             return  # Only split one coin at a time to avoid complications
                         else:
                             log.warning(f"Failed to split coin: {result}")
+                            await self._emit_progress(
+                                {
+                                    "event": "coin_split_failed",
+                                    "message": f"Failed to split coin {coin['name'][:8]}...: {result}",
+                                    "coin_name": coin["name"],
+                                    "error": result,
+                                }
+                            )
                     except Exception as e:
                         log.warning(f"Failed to split large coin: {e}")
+                        await self._emit_progress(
+                            {
+                                "event": "coin_split_error",
+                                "message": f"Error splitting coin {coin['name'][:8]}...: {e}",
+                                "coin_name": coin["name"],
+                                "error": str(e),
+                            }
+                        )
 
-        except Exception:
+        except Exception as e:
             log.exception("Error in coin splitting")
+            await self._emit_progress(
+                {"event": "coin_splitting_error", "message": f"Error in coin splitting process: {e}", "error": str(e)}
+            )
 
     async def run(self, run_once=False):
         log.info(
@@ -497,10 +734,42 @@ class LittleLiquidator:
             f"private key: {'******' if self.rpc_client.synthetic_secret_keys else 'None'}, "
             f"fee per cost: {self.rpc_client.fee_per_cost}"
         )
+
+        # Emit detailed liquidator configuration at startup
+        config = {
+            "max_bid_milli_amount": self.max_bid_milli_amount,
+            "min_discount": self.min_discount,
+            "min_profit_threshold": self.min_profit_threshold,
+            "transaction_fee": self.transaction_fee,
+            "max_offer_amount": self.max_offer_amount,
+            "offer_expiry_seconds": self.offer_expiry_seconds,
+            "base_url": str(self.rpc_client.client.base_url),
+            "has_private_keys": bool(self.rpc_client.synthetic_secret_keys),
+            "fee_per_cost": self.rpc_client.fee_per_cost,
+        }
+
+        await self._emit_progress(
+            {
+                "event": "liquidator_started",
+                "message": "Little Liquidator started with configuration",
+                "configuration": config,
+            }
+        )
+
         if self.rpc_client.synthetic_public_keys:
             log.info(f"Synthetic public keys: {self.rpc_client.synthetic_public_keys}")
+            await self._emit_progress(
+                {
+                    "event": "keys_loaded",
+                    "message": f"Loaded {len(self.rpc_client.synthetic_public_keys)} synthetic public keys",
+                }
+            )
         else:
             log.warning("No synthetic public keys found, will not bid on auctions.")
+            await self._emit_progress(
+                {"event": "warning", "message": "No synthetic public keys found - liquidator will not bid on auctions"}
+            )
+
         if run_once:
             await self.process_once()
             return
@@ -514,15 +783,53 @@ class LittleLiquidator:
         except Exception as e:
             log.exception("Error processing liquidations: %s", e)
             await self._emit_progress({"event": "error", "message": f"Error processing liquidations: {e}"})
-        
+
+        # Show current balance before waiting for next upkeep event
+        try:
+            ignore_coins = await self._get_ignore_coins()
+            balances = await self.rpc_client.wallet_balances(ignore_coin_names=ignore_coins)
+
+            # Get active offers status
+            offers_status = await self.get_offers_status()
+            active_offers = [offer for offer in offers_status.get("offers", []) if not offer.get("is_expired", True)]
+            pending_offers = [offer for offer in offers_status.get("offers", []) if offer.get("is_expired", True)]
+
+            # Extract key balance information
+            xch_balance = balances.get("xch", 0) / MOJOS
+            byc_balance = balances.get("byc", 0) / MCAT
+
+            balance_summary = f"XCH: {xch_balance:.6f}, BYC: {byc_balance:.2f}"
+            offers_summary = f"Active offers: {len(active_offers)}, Pending renewal: {len(pending_offers)}"
+
+            await self._emit_progress(
+                {
+                    "event": "current_balance",
+                    "message": f"Current balances before upkeep wait - {balance_summary}, {offers_summary}",
+                    "balances": {
+                        "xch": xch_balance,
+                        "byc": byc_balance,
+                        "locked_coins_count": len(ignore_coins),
+                    },
+                    "offers": {
+                        "active_count": len(active_offers),
+                        "pending_renewal_count": len(pending_offers),
+                        "total_count": offers_status.get("total_offers", 0),
+                    },
+                }
+            )
+        except Exception as e:
+            log.exception(f"Failed to get balances for progress report: {e}")
+            await self._emit_progress(
+                {"event": "balance_check_failed", "message": f"Could not retrieve current balances: {e}"}
+            )
+
         await self._emit_progress({"event": "waiting", "message": "Waiting 30 seconds for next upkeep cycle"})
         log.info("Waiting for next upkeep...")
         await asyncio.sleep(30)
 
     async def process_once(self):
-        log.warning("Starting liquidator process...")
         await self._emit_progress({"event": "started", "message": "Starting liquidation process"})
-        
+
         # fetch the latest fee per cost from the node
         await self._emit_progress({"event": "status", "message": "Fetching fee per cost from node"})
         await self.rpc_client.set_fee_per_cost()
@@ -555,15 +862,17 @@ class LittleLiquidator:
             return result
 
         log.info("State: %s", pformat(state))
-        
+
         # Emit progress with state summary
         pending_count = len(state.get("vaults_pending_liquidation", []))
         in_liquidation_count = len(state.get("vaults_in_liquidation", []))
         bad_debt_count = len(state.get("vaults_with_bad_debt", []))
-        await self._emit_progress({
-            "event": "state_fetched", 
-            "message": f"State fetched - Pending: {pending_count}, In liquidation: {in_liquidation_count}, Bad debt: {bad_debt_count}"
-        })
+        await self._emit_progress(
+            {
+                "event": "state_fetched",
+                "message": f"State fetched - Pending: {pending_count}, In liquidation: {in_liquidation_count}, Bad debt: {bad_debt_count}",
+            }
+        )
 
         # Update the current state with vault information
         result["current_state"]["vaults_pending_liquidation"] = state.get("vaults_pending_liquidation", [])
@@ -604,22 +913,43 @@ class LittleLiquidator:
             log.debug("State after restarts: %s", pformat(state))
             # either bid or start, but not both in the same iteration to avoid block size issues
             if state.get("vaults_in_liquidation"):
-                await self._emit_progress({"event": "status", "message": f"Bidding on {len(state['vaults_in_liquidation'])} auctions"})
+                await self._emit_progress(
+                    {"event": "status", "message": f"Bidding on {len(state['vaults_in_liquidation'])} auctions"}
+                )
                 bid_results = await self.bid_on_auctions(state["vaults_in_liquidation"], balances)
                 result["actions_taken"]["bids_placed"] = bid_results["bids_placed"]
                 result["actions_taken"]["offers_created"] = bid_results["offers_created"]
-                await self._emit_progress({"event": "bids_completed", "message": f"Placed {bid_results['bids_placed']} bids, created {len(bid_results['offers_created'])} offers"})
+                await self._emit_progress(
+                    {
+                        "event": "bids_completed",
+                        "message": f"Placed {bid_results['bids_placed']} bids, created {len(bid_results['offers_created'])} offers",
+                    }
+                )
             elif state.get("vaults_pending_liquidation"):
-                await self._emit_progress({"event": "status", "message": f"Starting auctions for {len(state['vaults_pending_liquidation'])} vaults"})
+                await self._emit_progress(
+                    {
+                        "event": "status",
+                        "message": f"Starting auctions for {len(state['vaults_pending_liquidation'])} vaults",
+                    }
+                )
                 auctions_started = await self.start_auctions(state["vaults_pending_liquidation"])
                 result["actions_taken"]["auctions_started"] = auctions_started
-                await self._emit_progress({"event": "auctions_started", "message": f"Started {auctions_started} auctions"})
-            
+                await self._emit_progress(
+                    {"event": "auctions_started", "message": f"Started {auctions_started} auctions"}
+                )
+
             if state.get("vaults_with_bad_debt"):
-                await self._emit_progress({"event": "status", "message": f"Recovering bad debts for {len(state['vaults_with_bad_debt'])} vaults"})
+                await self._emit_progress(
+                    {
+                        "event": "status",
+                        "message": f"Recovering bad debts for {len(state['vaults_with_bad_debt'])} vaults",
+                    }
+                )
                 bad_debts_recovered = await self.recover_bad_debts(state["vaults_with_bad_debt"], state)
                 result["actions_taken"]["bad_debts_recovered"] = bad_debts_recovered
-                await self._emit_progress({"event": "bad_debts_recovered", "message": f"Recovered {bad_debts_recovered} bad debts"})
+                await self._emit_progress(
+                    {"event": "bad_debts_recovered", "message": f"Recovered {bad_debts_recovered} bad debts"}
+                )
 
         await self._emit_progress({"event": "completed", "message": "Liquidation process completed", "done": True})
         return result
@@ -630,14 +960,38 @@ class LittleLiquidator:
         for vault_pending in vaults_pending:
             vault_pending_name = vault_pending["name"]
             log.info("Starting auction for vault %s", vault_pending_name)
+            await self._emit_progress(
+                {
+                    "event": "transaction_starting",
+                    "message": f"Starting auction for vault {vault_pending_name}",
+                    "transaction_type": "vault_liquidation",
+                    "vault_name": vault_pending_name,
+                }
+            )
             try:
                 result = await self.rpc_client.upkeep_vaults_liquidate(
                     coin_name=vault_pending_name, ignore_coin_names=await self._get_ignore_coins()
                 )
                 log.info(f"Auction started for vault {vault_pending_name}: {result}")
+                await self._emit_progress(
+                    {
+                        "event": "transaction_completed",
+                        "message": f"Auction started for vault {vault_pending_name}",
+                        "transaction_type": "vault_liquidation",
+                        "vault_name": vault_pending_name,
+                    }
+                )
                 auctions_started += 1
             except APIError as e:
                 log.error("Failed to start auction for vault %s: %s", vault_pending_name, e)
+                await self._emit_progress(
+                    {
+                        "event": "transaction_failed",
+                        "message": f"Failed to start auction for vault {vault_pending_name}: {e}",
+                        "transaction_type": "vault_liquidation",
+                        "vault_name": vault_pending_name,
+                    }
+                )
         return auctions_started
 
     async def bid_on_auctions(self, vaults_in_liquidation, balances):
@@ -679,7 +1033,7 @@ class LittleLiquidator:
             )
             mbyc_bid_amount = self.calculate_byc_bid_amount(
                 current_balances, vault_info, min_bid_amount_bps, min_bid_amount_flat
-            )
+            ) / MCAT
             if mbyc_bid_amount < 0:
                 log.info("Insufficient balance to bid")
                 continue
@@ -697,6 +1051,17 @@ class LittleLiquidator:
             )
 
             try:
+                await self._emit_progress(
+                    {
+                        "event": "transaction_starting",
+                        "message": f"Placing bid on vault {vault_name} ({mbyc_bid_amount} TBYC for {xch_to_acquire / MOJOS:.3f} XCH)",
+                        "transaction_type": "vault_bid",
+                        "vault_name": vault_name,
+                        "bid_amount": mbyc_bid_amount,
+                        "xch_amount": xch_to_acquire / MOJOS,
+                    }
+                )
+
                 # Place the bid
                 result = await self.rpc_client.upkeep_vaults_bid(
                     coin_name=vault_name,
@@ -705,6 +1070,14 @@ class LittleLiquidator:
                     ignore_coin_names=await self._get_ignore_coins(),
                 )
                 log.info(f"Bid placed for vault {vault_name}: {result}")
+                await self._emit_progress(
+                    {
+                        "event": "transaction_completed",
+                        "message": f"Successfully placed bid on vault {vault_name}",
+                        "transaction_type": "vault_bid",
+                        "vault_name": vault_name,
+                    }
+                )
                 bids_placed += 1
                 # Refresh balances after successful bid
                 ignore_coins = await self._get_ignore_coins()
@@ -731,7 +1104,7 @@ class LittleLiquidator:
                 if offer_result["success"]:
                     log.info(f"Successfully created offer for {xch_to_acquire / MOJOS} XCH")
                     if offer_result.get("offer_bech32"):
-                        offers_created.append(offer_result["offer_bech32"])
+                        offers_created.append(offer_result)
                     if offer_result.get("dexie_id"):
                         log.info(f"Offer uploaded to dexie.space with ID: {offer_result['dexie_id']}")
                     break
@@ -740,6 +1113,14 @@ class LittleLiquidator:
 
             except APIError as e:
                 log.error("Failed to bid on auction for vault %s: %s", vault_name, e)
+                await self._emit_progress(
+                    {
+                        "event": "transaction_failed",
+                        "message": f"Failed to place bid on vault {vault_name}: {e}",
+                        "transaction_type": "vault_bid",
+                        "vault_name": vault_name,
+                    }
+                )
 
         return {"bids_placed": bids_placed, "offers_created": offers_created}
 
@@ -747,7 +1128,7 @@ class LittleLiquidator:
         # Support both possible keys used across code/tests
         byc_balance = balances.get("byc", balances.get("byc_balance", 0))
         # Determine required BYC to be able to bid up to max_bid_amount (in BYC units)
-        vault_debt = vault_info["debt"]
+        vault_debt = vault_info["debt"] or 0
         # calculate minimum bid required by calculating relative and taking max out of it relative or flat
         min_relative_bid_amount = (vault_debt * min_bid_amount_bps) / PRECISION_BPS
         required = max(min_relative_bid_amount, min_bid_amount_flat)
@@ -755,7 +1136,10 @@ class LittleLiquidator:
         if byc_balance < required:
             log.info("Not enough TBYC to bid up to max amount, skipping")
             return -1
-        return min(byc_balance - required, self.max_bid_milli_amount, vault_debt)
+        if self.max_bid_milli_amount:
+            return min(byc_balance - required, self.max_bid_milli_amount, vault_debt)
+        else:
+            return min(byc_balance - required, vault_debt)
 
     def calculate_acquired_xch(self, byc_bid_amount, available_xch, bid_price_per_xch):
         log.debug(f"Calculating xch to acquire with params: {self.max_bid_milli_amount}, {bid_price_per_xch}")
@@ -792,7 +1176,7 @@ class LittleLiquidator:
 
         # Convert market_price_ratio (TBYC/XCH) to market price (mTBYC/XCH) for comparison
         market_price_byc = (1 / market_price_ratio) * PRICE_PRECISION
-        auction_price_byc = (auction_price_per_xch / PRICE_PRECISION)
+        auction_price_byc = auction_price_per_xch / PRICE_PRECISION
         # Calculate discount from market price
         discount = (market_price_byc - auction_price_byc) / market_price_byc if market_price_byc > 0 else 0
 
@@ -829,6 +1213,19 @@ class LittleLiquidator:
             offer_price = market_price / PRICE_PRECISION * 0.995  # 0.5% below market
             byc_amount_to_receive = xch_amount_in_whole * offer_price
 
+            await self._emit_progress(
+                {
+                    "event": "offer_creation_started",
+                    "message": f"Creating new offer - {xch_amount_in_whole:.6f} XCH for {byc_amount_to_receive:.2f} TBYC at price {offer_price}",
+                    "offer_details": {
+                        "xch_amount": xch_amount_in_whole,
+                        "byc_amount": byc_amount_to_receive,
+                        "offer_price": offer_price,
+                        "market_price": market_price,
+                    },
+                }
+            )
+
             log.info(f"Creating offer: {xch_amount_in_whole} XCH for {byc_amount_to_receive:.2f} TBYC at {offer_price}")
 
             # Get ignore coins to pass to offer creation
@@ -859,11 +1256,6 @@ class LittleLiquidator:
                 offer_bundle = SpendBundle.from_json_dict(offer_result["bundle"])
                 unsigned_offer = Offer.from_spend_bundle(offer_bundle)
                 offer = Offer(unsigned_offer.requested_payments, signed_off_bundle, unsigned_offer.driver_dict)
-                log.debug(
-                    "Aggregated sig: %s (prev: %s)",
-                    offer.aggregated_signature(),
-                    signed_off_bundle.aggregated_signature,
-                )
                 offer_data = {
                     "offer": offer.to_bech32(),
                     "requested": [{"asset_id": "TBYC", "amount": int(byc_amount_to_receive)}],
@@ -871,7 +1263,7 @@ class LittleLiquidator:
                     "price": offer_price,
                 }
                 # Upload to dexie.space
-                upload_result = await upload_offer_to_dexie(offer_data)
+                upload_result = await upload_offer_to_dexie(offer_data, self._emit_progress)
                 current_time = self._now()
 
                 if upload_result:
@@ -881,7 +1273,30 @@ class LittleLiquidator:
                     # Add offer to active tracking
                     await self._add_active_offer(offer_id, xch_amount_in_whole, current_time, market_price)
 
-                    return {"success": True, "dexie_id": offer_id, "offer_bech32": offer_data["offer"]}
+                    await self._emit_progress(
+                        {
+                            "event": "offer_creation_success",
+                            "message": f"Successfully created and uploaded offer {offer_id} - {xch_amount_in_whole:.6f} XCH for {byc_amount_to_receive:.2f} TBYC",
+                            "offer_id": offer_id,
+                            "dexie_upload": True,
+                            "offer_details": {
+                                "xch_amount": xch_amount_in_whole,
+                                "byc_amount": byc_amount_to_receive,
+                                "offer_price": offer_price,
+                            },
+                        }
+                    )
+
+                    return {
+                        "success": True,
+                        "dexie_id": offer_id,
+                        "offer_bech32": offer_data["offer"],
+                        "offer_details": {
+                            "xch_amount": xch_amount_in_whole,
+                            "byc_amount": byc_amount_to_receive,
+                            "offer_price": offer_price,
+                        },
+                    }
                 else:
                     offer_id = f"local_{int(current_time)}"
                     log.warning("Failed to upload offer to dexie.space, but offer created locally")
@@ -889,18 +1304,60 @@ class LittleLiquidator:
                     # Add offer to active tracking even if not uploaded
                     await self._add_active_offer(offer_id, xch_amount_in_whole, current_time, market_price)
 
+                    await self._emit_progress(
+                        {
+                            "event": "offer_creation_partial_success",
+                            "message": f"Created offer {offer_id} locally but failed to upload to Dexie - {xch_amount_in_whole:.6f} XCH for {byc_amount_to_receive:.2f} TBYC",
+                            "offer_id": offer_id,
+                            "dexie_upload": False,
+                            "offer_details": {
+                                "xch_amount": xch_amount_in_whole,
+                                "byc_amount": byc_amount_to_receive,
+                                "offer_price": offer_price,
+                            },
+                        }
+                    )
+
                     return {
                         "success": True,
                         "local_only": True,
+                        "offer_details": {
+                            "xch_amount": xch_amount_in_whole,
+                            "byc_amount": byc_amount_to_receive,
+                            "offer_price": offer_price,
+                        },
                         "offer_id": offer_id,
                         "offer_bech32": offer_data["offer"],
                     }
             else:
                 log.error(f"Failed to create offer: {offer_result}")
+                await self._emit_progress(
+                    {
+                        "event": "offer_creation_failed",
+                        "message": f"Failed to create offer for {xch_amount_in_whole:.6f} XCH - RPC call failed",
+                        "error": "Offer RPC creation failed",
+                        "offer_details": {
+                            "xch_amount": xch_amount_in_whole,
+                            "byc_amount": byc_amount_to_receive,
+                            "offer_price": offer_price,
+                        },
+                    }
+                )
                 return {"success": False}
 
         except Exception as e:
             log.exception(f"Failed to create and upload offer: {e}")
+            await self._emit_progress(
+                {
+                    "event": "offer_creation_failed",
+                    "message": f"Failed to create offer for {xch_amount_in_whole:.6f} XCH - {str(e)}",
+                    "error": str(e),
+                    "offer_details": {
+                        "xch_amount": xch_amount_in_whole if "xch_amount_in_whole" in locals() else xch_amount / MOJOS,
+                        "target_byc_amount": byc_amount_to_receive if "byc_amount_to_receive" in locals() else 0,
+                    },
+                }
+            )
             return {"success": False, "error": str(e)}
 
     async def check_and_restart_incomplete_liquidations(self, state):
@@ -964,23 +1421,110 @@ class LittleLiquidator:
         treasury_balance = state.get("treasury_balance", 0)
         log.info(f"Treasury balance: {treasury_balance}")
 
-        for vault_with_bad_debt in vaults_with_bad_debt:
+        # Calculate total debt to recover and provide detailed recovery plan
+        total_debt_amount = sum(vault.get("principal", 0) for vault in vaults_with_bad_debt)
+        recoverable_debt_amount = 0
+        recoverable_vaults = []
+        skipped_vaults = []
+
+        for vault in vaults_with_bad_debt:
+            vault_debt = vault.get("principal", 0)
+            if treasury_balance >= vault_debt:
+                recoverable_debt_amount += vault_debt
+                recoverable_vaults.append(vault)
+            else:
+                skipped_vaults.append(vault)
+
+        # Emit detailed recovery plan
+        await self._emit_progress(
+            {
+                "event": "debt_recovery_plan",
+                "message": f"Bad debt recovery plan - Total debt: {total_debt_amount}, Recoverable: {recoverable_debt_amount}, Treasury balance: {treasury_balance}",
+                "recovery_plan": {
+                    "total_vaults_with_debt": len(vaults_with_bad_debt),
+                    "total_debt_amount": total_debt_amount,
+                    "recoverable_vaults": len(recoverable_vaults),
+                    "recoverable_debt_amount": recoverable_debt_amount,
+                    "skipped_vaults": len(skipped_vaults),
+                    "treasury_balance": treasury_balance,
+                    "can_recover_all": len(skipped_vaults) == 0,
+                },
+            }
+        )
+
+        # Report on skipped vaults if any
+        for vault_with_bad_debt in skipped_vaults:
+            vault_name = vault_with_bad_debt["name"]
+            vault_debt = vault_with_bad_debt.get("principal", 0)
+            log.info(
+                f"Skipping bad debt recovery for vault {vault_name}: treasury balance ({treasury_balance}) insufficient to cover debt ({vault_debt})"
+            )
+            await self._emit_progress(
+                {
+                    "event": "debt_recovery_skipped",
+                    "message": f"Skipping vault {vault_name} - insufficient treasury balance (need {vault_debt}, have {treasury_balance})",
+                    "vault_name": vault_name,
+                    "required_balance": vault_debt,
+                    "available_balance": treasury_balance,
+                    "shortfall": vault_debt - treasury_balance,
+                }
+            )
+
+        # Process recoverable vaults
+        for vault_with_bad_debt in recoverable_vaults:
             vault_name = vault_with_bad_debt["name"]
             vault_debt = vault_with_bad_debt.get("principal", 0)
 
-            # Only start recovery if treasury balance is high enough to cover the debt
-            if treasury_balance < vault_debt:
-                log.info(
-                    f"Skipping bad debt recovery for vault {vault_name}: treasury balance ({treasury_balance}) insufficient to cover debt ({vault_debt})"
-                )
-                continue
-
             log.info("Recovering bad debt for vault %s (debt: %s)", vault_name, vault_debt)
+            await self._emit_progress(
+                {
+                    "event": "debt_recovery_starting",
+                    "message": f"Starting bad debt recovery for vault {vault_name} - recovering {vault_debt} from treasury",
+                    "vault_name": vault_name,
+                    "debt_amount": vault_debt,
+                    "treasury_balance_before": treasury_balance,
+                    "recovery_method": "treasury_withdrawal",
+                }
+            )
             try:
                 ignore_coins = await self._get_ignore_coins()
                 result = await self.rpc_client.upkeep_vaults_recover(vault_name, ignore_coin_names=ignore_coins)
                 log.info(f"Recovered some debt for vault {vault_name}: {result}")
+                await self._emit_progress(
+                    {
+                        "event": "debt_recovery_completed",
+                        "message": f"Successfully recovered bad debt for vault {vault_name} - {vault_debt} recovered from treasury",
+                        "vault_name": vault_name,
+                        "recovered_amount": vault_debt,
+                        "recovery_result": result,
+                    }
+                )
                 bad_debts_recovered += 1
+                # Update treasury balance for next iteration
+                treasury_balance -= vault_debt
             except APIError as e:
                 log.error("Failed to recover bad debt for vault %s: %s", vault_name, e)
+                await self._emit_progress(
+                    {
+                        "event": "debt_recovery_failed",
+                        "message": f"Failed to recover bad debt for vault {vault_name}: {e}",
+                        "vault_name": vault_name,
+                        "attempted_recovery_amount": vault_debt,
+                        "error": str(e),
+                    }
+                )
+
+        # Final recovery summary
+        await self._emit_progress(
+            {
+                "event": "debt_recovery_summary",
+                "message": f"Bad debt recovery completed - recovered {bad_debts_recovered} of {len(vaults_with_bad_debt)} vaults, total amount: {sum(vault.get('principal', 0) for vault in recoverable_vaults[:bad_debts_recovered])}",
+                "recovery_summary": {
+                    "vaults_recovered": bad_debts_recovered,
+                    "total_vaults": len(vaults_with_bad_debt),
+                    "success_rate": bad_debts_recovered / len(vaults_with_bad_debt) if vaults_with_bad_debt else 0,
+                },
+            }
+        )
+
         return bad_debts_recovered

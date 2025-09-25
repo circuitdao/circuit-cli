@@ -8,8 +8,6 @@ import sys
 import httpx
 from circuit_cli.client import CircuitRPCClient
 
-from circuit.drivers.protocol_math import MCAT
-
 log = logging.getLogger(__name__)
 
 
@@ -67,6 +65,12 @@ async def cli():
         choices=["off", "text", "json"],
         default=os.environ.get("CIRCUIT_CLI_PROGRESS", "text"),
         help="Stream progress while waiting for confirmations: 'off' (default), 'text' for human output, 'json' for JSONL events",
+    )
+    parser.add_argument(
+        "--approval-mode",
+        action="store_true",
+        default=os.environ.get("CIRCUIT_CLI_APPROVAL_MODE", "").lower() in ("true", "1", "yes"),
+        help="Enable approval mode to require user confirmation before submitting transactions",
     )
 
     ### UPKEEP ###
@@ -970,6 +974,7 @@ async def cli():
         fee_per_cost=args.fee_per_cost,
         no_wait_for_tx=args.no_wait,
         dict_store_path=args.dd,
+        approval_mode=args.approval_mode,
     )
 
     if args.command == "upkeep" and args.action == "liquidator":
@@ -985,9 +990,12 @@ async def cli():
                 from circuit_cli.progress import make_text_progress_handler
                 progress_handler = make_text_progress_handler()
 
+        # Set progress handler on RPC client too so all requests are visible
+        rpc_client.progress_handler = progress_handler
+
         liquidator = LittleLiquidator(
             rpc_client=rpc_client,
-            max_bid_milli_amount=args.max_bid_amount * MCAT if args.max_bid_amount else None,
+            max_bid_milli_amount=args.max_bid_amount * 1000 if args.max_bid_amount else None,
             min_discount=args.min_discount,
             min_profit_threshold=getattr(args, "min_profit_threshold", 0.02),
             max_offer_amount=getattr(args, "max_offer_amount", 1.0),
@@ -1064,6 +1072,7 @@ async def cli():
         del kwargs["verbose"]
         del kwargs["progress"]
         del kwargs["dd"]
+        del kwargs["approval_mode"]
         # Remove testing-only args if present
         kwargs.pop("current_time", None)
         log.info(f"Calling {function_name} with {kwargs}")

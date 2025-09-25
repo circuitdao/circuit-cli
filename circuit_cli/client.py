@@ -37,7 +37,8 @@ def setup_console_logging():
     if root_logger.handlers:
         # Respect existing configuration set by the CLI.
         logging.getLogger("httpx").setLevel(logging.WARNING)
-        logging.getLogger("circuit_cli").setLevel(root_logger.level or logging.INFO)
+        logging.getLogger("circuit_cli").setLevel(root_logger.level or logging.DEBUG)
+        logging.getLogger("little_liquidator").setLevel(root_logger.level or logging.DEBUG)
         return
 
     # Fallback default (library context). Keep it simple and avoid duplicate handlers.
@@ -45,10 +46,11 @@ def setup_console_logging():
     formatter = logging.Formatter(fmt="%(levelname)s: %(message)s")
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(logging.DEBUG)
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("circuit_cli").setLevel(logging.INFO)
+    logging.getLogger("circuit_cli").setLevel(logging.DEBUG)
+    logging.getLogger("little_liquidator").setLevel(logging.DEBUG)
 
 
 class APIError(Exception):
@@ -92,6 +94,7 @@ class CircuitRPCClient:
         key_count: int = 500,
         no_wait_for_tx: bool = False,
         dict_store_path: str = None,
+        approval_mode: bool = False,
     ):
         """Create a CircuitRPCClient.
 
@@ -103,6 +106,7 @@ class CircuitRPCClient:
             client: Optional pre-configured httpx.AsyncClient to use instead of creating a new one.
             key_count: Number of synthetic keys to derive from the master key.
             no_wait_for_tx: If True, skip waiting for confirmation after submitting transactions.
+            approval_mode: If True, prompt user for confirmation before submitting any transaction.
 
         Notes:
             - If no private_key is provided, operations requiring signatures will fail.
@@ -137,7 +141,9 @@ class CircuitRPCClient:
         self._fee_per_cost = fee_per_cost
         self.fee_per_cost: float | None = None
         self.no_wait_for_confirmation = no_wait_for_tx
+        self.approval_mode = approval_mode
         log.info(f"Using no_wait_for_confirmation={no_wait_for_tx}")
+        log.info(f"Using approval_mode={approval_mode}")
         log.info(f"Using key_count={key_count}")
         log.info(f"Using dict_store_path={dict_store_path}")
         self.store = DictStore(dict_store_path)
@@ -173,8 +179,8 @@ class CircuitRPCClient:
             fee_per_costs = response_data.get("fee_per_costs")
             self.fee_per_cost = fee_per_costs.get(self._fee_per_cost)
             if self._fee_per_cost == "fast":
-                # #TODO: amplify fullnode estimates via arg
-                self.fee_per_cost *= 2
+                # TODO: amplify fullnode estimates via arg
+                self.fee_per_cost = 12
         else:
             self.fee_per_cost = float(self._fee_per_cost)
         log.info("Set fee_per_cost to: %s", self.fee_per_cost)
@@ -210,6 +216,14 @@ class CircuitRPCClient:
             # Truncate lists in params and json_data for logging
             log_params = {k: truncate_list(v) for k, v in (params or {}).items()}
             log_json = {k: truncate_list(v) for k, v in (json_data or {}).items()}
+
+            # Emit progress event for RPC request
+            await self._emit_progress({
+                "event": "rpc_request",
+                "method": method.upper(),
+                "endpoint": endpoint,
+                "message": f"Making {method.upper()} request to {endpoint}"
+            })
 
             log.info(f"Making request to {method} {endpoint} with params {log_params} and json_data {log_json}")
             # Optional human-friendly endpoint trace in text mode
@@ -501,12 +515,13 @@ class CircuitRPCClient:
         signed_bundle = await sign_spends(bundle.coin_spends, self.synthetic_secret_keys, add_data=self.add_sig_data)
         return signed_bundle
 
-    async def sign_and_push(self, bundle: SpendBundle, error_handling_info: dict = None, sign=True):
+    async def sign_and_push(self, bundle: SpendBundle, error_handling_info: dict = None, sign=True, tx_type: str = None):
         """Sign a SpendBundle locally and push it to the RPC service.
 
         Args:
             bundle: The unsigned or partially signed SpendBundle to sign.
             error_handling_info: Optional dict with server-specific error handling hints.
+            tx_type: Optional description of transaction type for progress events.
 
         Returns:
             The server response JSON as a dict, typically including the signed bundle.
@@ -523,7 +538,40 @@ class CircuitRPCClient:
         else:
             signed_bundle = bundle
         assert isinstance(signed_bundle, SpendBundle)
-        log.info("Signed bundle: %s, pushing", signed_bundle.name().hex())
+        
+        # User approval check if approval mode is enabled
+        if self.approval_mode:
+            tx_id = signed_bundle.name().hex()
+            tx_description = f"{'signed ' if sign else ''}transaction{f' ({tx_type})' if tx_type else ''}"
+            
+            print(f"\n⚠️  Transaction Approval Required")
+            print(f"Transaction ID: {tx_id}")
+            print(f"Type: {tx_description}")
+            print(f"Base URL: {self.base_url}")
+            
+            try:
+                # Use input() for synchronous user input
+                response = input("Do you want to proceed with this transaction? (y/N): ").strip().lower()
+                if response not in ['y', 'yes']:
+                    print("❌ Transaction cancelled by user.")
+                    raise APIError("Transaction cancelled by user approval")
+                print("✅ Transaction approved by user.")
+            except (KeyboardInterrupt, EOFError):
+                print("\n❌ Transaction cancelled by user.")
+                raise APIError("Transaction cancelled by user approval")
+        
+        # Emit progress event for transaction push
+        tx_id = signed_bundle.name().hex()
+        push_event = {
+            "event": "transaction_push", 
+            "tx_id": tx_id,
+            "message": f"Pushing {'signed ' if sign else ''}transaction{f' ({tx_type})' if tx_type else ''}"
+        }
+        if tx_type:
+            push_event["transaction_type"] = tx_type
+        await self._emit_progress(push_event)
+        
+        log.info("Signed bundle: %s, pushing", tx_id)
         response = await self.client.post(
             "/sign_and_push",
             json={
@@ -537,7 +585,7 @@ class CircuitRPCClient:
             if error_handling_info is not None:
                 error_msg += f" Error handling info: {error_handling_info}"
             raise APIError(error_msg, response)
-        log.info("Transaction signed and broadcast. ID %s", signed_bundle.name().hex())
+        log.info("Transaction signed and broadcast. ID %s", tx_id)
         return response.json()
 
     ### WALLET ###
@@ -1524,7 +1572,7 @@ class CircuitRPCClient:
         if response.is_error:
             raise APIError(response.content)
         bundle: SpendBundle = SpendBundle.from_json_dict(response.json())
-        sig_response = await self.sign_and_push(bundle)
+        sig_response = await self.sign_and_push(bundle, tx_type="vault_liquidation")
         signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
@@ -1575,7 +1623,7 @@ class CircuitRPCClient:
         if response.is_error:
             raise APIError(response.content)
         bundle: SpendBundle = SpendBundle.from_json_dict(response.json())
-        sig_response = await self.sign_and_push(bundle)
+        sig_response = await self.sign_and_push(bundle, tx_type="vault_bid")
         signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
@@ -1653,7 +1701,7 @@ class CircuitRPCClient:
             print(response.content)
             response.raise_for_status()
         bundle: SpendBundle = SpendBundle.from_json_dict(response.json())
-        sig_response = await self.sign_and_push(bundle)
+        sig_response = await self.sign_and_push(bundle, tx_type="vault_bad_debt_recovery")
         signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
         await self.wait_for_confirmation(signed_bundle)
         return sig_response

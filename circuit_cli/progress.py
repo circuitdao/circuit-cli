@@ -64,7 +64,7 @@ def make_text_progress_handler() -> Callable[[Dict[str, Any]], None]:
         last_len = st.get("last_len", 0)
         if final:
             clear = "" if last_len <= len(line) else " " * (last_len - len(line))
-            sys.stderr.write("\r" + line + clear + "\n\n")
+            sys.stderr.write("\r" + line + clear + "\n")
             st["last_len"] = 0
         else:
             sys.stderr.write("\r" + line)
@@ -170,14 +170,171 @@ def make_text_progress_handler() -> Callable[[Dict[str, Any]], None]:
             total_col = f"{colors['dim']}{elapsed_str(st)}{colors['reset']}" if colors["dim"] else elapsed_str(st)
             write_line(st, f"{colors['err']}Error{colors['reset']} while checking status (code {code}): {content} | elapsed: {total_col}", final=True)
             state.pop(key, None)
+        elif event in ("started", "status", "state_fetched", "bids_completed", "auctions_started", "bad_debts_recovered", "completed", "waiting", "rpc_request", "transaction_push", "transaction_starting", "transaction_completed", "transaction_failed", 
+                       "dexie_upload_started", "dexie_upload_request", "dexie_upload_success", "dexie_upload_failed",
+                       "offer_renewal_started", "offer_renewal_attempt", "offer_renewal_success", "offer_renewal_failed",
+                       "coin_splitting_skipped", "coin_splitting_started", "coin_splitting", "coin_split_success", "coin_split_failed", "coin_split_error", "coin_splitting_error",
+                       "liquidator_started", "keys_loaded", "warning", "error", "current_balance", "balance_check_failed",
+                       "offer_creation_started", "offer_creation_success", "offer_creation_partial_success", "offer_creation_failed", "offer_file_summary",
+                       "debt_recovery_plan", "debt_recovery_skipped", "debt_recovery_starting", "debt_recovery_completed", "debt_recovery_failed", "debt_recovery_summary"):
+            # Handle liquidator-specific events with user-friendly formatting
+            message = ev.get("message", "")
+            
+            if event == "started":
+                icon = f"{colors['info']}🚀{colors['reset']}" if colors["info"] else "🚀"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "status":
+                icon = f"{colors['info']}ℹ️{colors['reset']}" if colors["info"] else "ℹ️"
+                write_line(st, f"{icon} {message}", final=False)
+            elif event == "state_fetched":
+                icon = f"{colors['ok']}📊{colors['reset']}" if colors["ok"] else "📊"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "bids_completed":
+                icon = f"{colors['ok']}💰{colors['reset']}" if colors["ok"] else "💰"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "auctions_started":
+                icon = f"{colors['ok']}⚡{colors['reset']}" if colors["ok"] else "⚡"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "bad_debts_recovered":
+                icon = f"{colors['ok']}🔧{colors['reset']}" if colors["ok"] else "🔧"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "completed":
+                icon = f"{colors['ok']}✅{colors['reset']}" if colors["ok"] else "✅"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "waiting":
+                icon = f"{colors['dim']}⏳{colors['reset']}" if colors["dim"] else "⏳"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "rpc_request":
+                method = ev.get("method", "")
+                endpoint = ev.get("endpoint", "")
+                icon = f"{colors['dim']}→{colors['reset']}" if colors["dim"] else "→"
+                write_line(st, f"{icon} {method} {endpoint}", final=True)
+            elif event == "transaction_push":
+                tx_type = ev.get("transaction_type", "")
+                tx_id = ev.get("tx_id", "")[:8] + "..." if ev.get("tx_id") else ""
+                icon = f"{colors['warn']}📤{colors['reset']}" if colors["warn"] else "📤"
+                type_str = f" ({tx_type})" if tx_type else ""
+                write_line(st, f"{icon} Pushing transaction{type_str} {tx_id}", final=True)
+            elif event == "transaction_starting":
+                icon = f"{colors['warn']}⚡{colors['reset']}" if colors["warn"] else "⚡"
+                write_line(st, f"{icon} {message}", final=False)
+            elif event == "transaction_completed":
+                icon = f"{colors['ok']}✅{colors['reset']}" if colors["ok"] else "✅"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "transaction_failed":
+                icon = f"{colors['err']}❌{colors['reset']}" if colors["err"] else "❌"
+                write_line(st, f"{icon} {message}", final=True)
+            # Dexie upload events
+            elif event == "dexie_upload_started":
+                icon = f"{colors['info']}📤{colors['reset']}" if colors["info"] else "📤"
+                write_line(st, f"{icon} {message}", final=False)
+            elif event == "dexie_upload_request":
+                icon = f"{colors['dim']}→{colors['reset']}" if colors["dim"] else "→"
+                write_line(st, f"{icon} {message}", final=False)
+            elif event == "dexie_upload_success":
+                icon = f"{colors['ok']}✅{colors['reset']}" if colors["ok"] else "✅"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "dexie_upload_failed":
+                icon = f"{colors['err']}❌{colors['reset']}" if colors["err"] else "❌"
+                write_line(st, f"{icon} {message}", final=True)
+            # Offer renewal events
+            elif event == "offer_renewal_started":
+                icon = f"{colors['info']}🔄{colors['reset']}" if colors["info"] else "🔄"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "offer_renewal_attempt":
+                icon = f"{colors['info']}🔁{colors['reset']}" if colors["info"] else "🔁"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "offer_renewal_success":
+                icon = f"{colors['ok']}✅{colors['reset']}" if colors["ok"] else "✅"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "offer_renewal_failed":
+                icon = f"{colors['err']}❌{colors['reset']}" if colors["err"] else "❌"
+                write_line(st, f"{icon} {message}", final=True)
+            # Coin splitting events
+            elif event == "coin_splitting_skipped":
+                icon = f"{colors['dim']}⏭️{colors['reset']}" if colors["dim"] else "⏭️"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "coin_splitting_started":
+                icon = f"{colors['info']}✂️{colors['reset']}" if colors["info"] else "✂️"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "coin_splitting":
+                icon = f"{colors['warn']}✂️{colors['reset']}" if colors["warn"] else "✂️"
+                write_line(st, f"{icon} {message}", final=False)
+            elif event == "coin_split_success":
+                icon = f"{colors['ok']}✅{colors['reset']}" if colors["ok"] else "✅"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event in ("coin_split_failed", "coin_split_error", "coin_splitting_error"):
+                icon = f"{colors['err']}❌{colors['reset']}" if colors["err"] else "❌"
+                write_line(st, f"{icon} {message}", final=True)
+            # Liquidator startup events
+            elif event == "liquidator_started":
+                icon = f"{colors['ok']}🚀{colors['reset']}" if colors["ok"] else "🚀"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "keys_loaded":
+                icon = f"{colors['ok']}🔑{colors['reset']}" if colors["ok"] else "🔑"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "warning":
+                icon = f"{colors['warn']}⚠️{colors['reset']}" if colors["warn"] else "⚠️"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "error":
+                icon = f"{colors['err']}❌{colors['reset']}" if colors["err"] else "❌"
+                write_line(st, f"{icon} {message}", final=True)
+            # Balance reporting events
+            elif event == "current_balance":
+                icon = f"{colors['info']}💰{colors['reset']}" if colors["info"] else "💰"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "balance_check_failed":
+                icon = f"{colors['err']}❌{colors['reset']}" if colors["err"] else "❌"
+                write_line(st, f"{icon} {message}", final=True)
+            # Offer creation events
+            elif event == "offer_creation_started":
+                icon = f"{colors['info']}📝{colors['reset']}" if colors["info"] else "📝"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "offer_creation_success":
+                icon = f"{colors['ok']}✅{colors['reset']}" if colors["ok"] else "✅"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "offer_creation_partial_success":
+                icon = f"{colors['warn']}⚠️{colors['reset']}" if colors["warn"] else "⚠️"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "offer_creation_failed":
+                icon = f"{colors['err']}❌{colors['reset']}" if colors["err"] else "❌"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "offer_file_summary":
+                icon = f"{colors['info']}📄{colors['reset']}" if colors["info"] else "📄"
+                write_line(st, f"{icon} {message}", final=True)
+            # Debt recovery events
+            elif event == "debt_recovery_plan":
+                icon = f"{colors['info']}📋{colors['reset']}" if colors["info"] else "📋"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "debt_recovery_skipped":
+                icon = f"{colors['dim']}⏭️{colors['reset']}" if colors["dim"] else "⏭️"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "debt_recovery_starting":
+                icon = f"{colors['warn']}🔧{colors['reset']}" if colors["warn"] else "🔧"
+                write_line(st, f"{icon} {message}", final=False)
+            elif event == "debt_recovery_completed":
+                icon = f"{colors['ok']}✅{colors['reset']}" if colors["ok"] else "✅"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "debt_recovery_failed":
+                icon = f"{colors['err']}❌{colors['reset']}" if colors["err"] else "❌"
+                write_line(st, f"{icon} {message}", final=True)
+            elif event == "debt_recovery_summary":
+                icon = f"{colors['info']}📊{colors['reset']}" if colors["info"] else "📊"
+                write_line(st, f"{icon} {message}", final=True)
         else:
+            # Handle any unknown events with user-friendly formatting instead of raw JSON
             st["stopped"] = True
             try:
                 if st.get("task") is not None and not st["task"].done():
                     st["task"].cancel()
             except Exception:
                 pass
-            write_line(st, str(ev), final=True)
+            
+            # Format unknown events in a user-friendly way
+            event_name = ev.get("event", "unknown")
+            message = ev.get("message", f"Event: {event_name}")
+            icon = f"{colors['info']}ℹ️{colors['reset']}" if colors["info"] else "ℹ️"
+            write_line(st, f"{icon} {message}", final=True)
             state.pop(key, None)
 
     return handler
