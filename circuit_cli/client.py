@@ -1213,13 +1213,7 @@ class CircuitRPCClient:
 
     async def upkeep_announcers_penalize(self, coin_name=None):
         if coin_name is None:
-            response = await self.client.post(
-                "/announcers",
-                json={
-                    "synthetic_pks": [],
-                    "penalizable": True,
-                },
-            )
+            response = await self.client.post("/announcers", json={"penalizable": True})
             data = response.json()
             if len(data) == 0:
                 return {"status": "failed", "error": "no penalizable announcer found"}
@@ -1516,19 +1510,38 @@ class CircuitRPCClient:
             return sig_response
 
     ## Vaults ##
-    async def upkeep_vaults_list(self, coin_name=None, seized=None, not_seized=None):
-        if seized and not_seized:
-            return []
-
-        if not_seized:
-            seized = False
-        elif seized is None:
-            seized = None
+    async def upkeep_vaults_list(
+            self, coin_name=None, liquidatable=False, startable=False, restartable=False,
+            in_liquidation=False, biddable=False, in_bad_debt=False, seized=False, not_seized=False
+    ):
+        if not seized:
+            if not not_seized:
+                seized = None
+            else: seized = False
+        else: seized = True
+        if not liquidatable:
+            liquidatable = None
+        if not startable:
+            startable = None
+        if not restartable:
+            restartable = None
+        if not in_liquidation:
+            in_liquidation = None
+        if not biddable:
+            biddable = None
+        if not in_bad_debt:
+            in_bad_debt = None
 
         if coin_name:
             response = await self.client.post(
                 f"/vaults/{coin_name}/",
                 json={
+                    "liquidatable": liquidatable,
+                    "startable": startable,
+                    "restartable": restartable,
+                    "in_liquidation": in_liquidation,
+                    "biddable": biddable,
+                    "in_bad_debt": in_bad_debt,
                     "seized": seized,
                 },
             )
@@ -1537,6 +1550,12 @@ class CircuitRPCClient:
         response = await self.client.post(
             "/vaults",
             json={
+                "liquidatable": liquidatable,
+                "startable": startable,
+                "restartable": restartable,
+                "in_liquidation": in_liquidation,
+                "biddable": biddable,
+                "in_bad_debt": in_bad_debt,
                 "seized": seized,
             },
         )
