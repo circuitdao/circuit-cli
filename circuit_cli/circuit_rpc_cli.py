@@ -470,36 +470,40 @@ async def cli():
         help="[optional] Name of vault coin. If specified, info for only this vault is shown",
     )
     upkeep_vaults_list_parser.add_argument(
+        "-t", "--transferrable-stability-fees", action="store_true",
+        help="List vaults from which Stability Fees can be transferred to Treasury",
+    )
+    upkeep_vaults_list_parser.add_argument(
         "-l", "--liquidatable", action="store_true",
-        help="Only list vaults on which a liquidation auction can be started (for first time or restart)",
+        help="List vaults on which a liquidation auction can be started (for first time or restart)",
     )
     upkeep_vaults_list_parser.add_argument(
         "-s", "--startable", action="store_true",
-        help="Only list vaults on which a liquidation auction can be started for first time",
+        help="List vaults on which a liquidation auction can be started for first time",
     )
     upkeep_vaults_list_parser.add_argument(
         "-r", "--restartable", action="store_true",
-        help="Only list vaults on which a liquidation auction can be restarted",
+        help="List vaults on which a liquidation auction can be restarted",
     )
     upkeep_vaults_list_parser.add_argument(
         "-il", "--in-liquidation", action="store_true",
-        help="Only list vaults in liquidation",
+        help="List vaults in liquidation",
     )
     upkeep_vaults_list_parser.add_argument(
         "-b", "--biddable", action="store_true",
-        help="Only list vaults that currently accept bids in a liquidation auction",
+        help="List vaults that currently accept bids in a liquidation auction",
     )
     upkeep_vaults_list_parser.add_argument(
         "-bd", "--in-bad-debt", action="store_true",
-        help="Only list vaults in bad debt",
+        help="List vaults in bad debt",
     )
     upkeep_vaults_list_parser.add_argument(
         "-z", "--seized", action="store_true",
-        help="Only list seized vaults (seized = in liquidation or bad debt)",
+        help="List seized vaults (seized = in liquidation or bad debt)",
     )
     upkeep_vaults_list_parser.add_argument(
         "-nz", "--not-seized", action="store_true",
-        help="Only list vaults that have not been seized"
+        help="List vaults that have not been seized"
     )
 
     # LATER: add -o/--ordered arg to order by outstanding SFs
@@ -545,7 +549,7 @@ async def cli():
     upkeep_vaults_recover_parser = upkeep_vaults_subparsers.add_parser(
         "recover", help="Recover bad debt", description="Recovers bad debt from a collateral vault."
     )
-    upkeep_vaults_recover_parser.add_argument("coin_name", type=str, help="Vault ID")
+    upkeep_vaults_recover_parser.add_argument("coin_name", type=str, help="Name of vault coin")
 
     ### cli / self ###
     self_parser = subparsers.add_parser("self", help="Commands to manage the CLI itself")
