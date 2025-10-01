@@ -100,7 +100,7 @@ async def cli():
         "--max-offer-amount", "-moa", type=float, default=1.0, help="Maximum XCH amount per offer (for coin splitting)"
     )
     upkeep_little_liquidator_parser.add_argument(
-        "--offer-expiry-seconds", "-oes", type=int, default=600, help="Offer expiry time in seconds (default: 600)"
+        "--offer-expiry-seconds", "-oes", type=int, default=300, help="Offer expiry time in seconds (default: 300)"
     )
     upkeep_little_liquidator_parser.add_argument(
         "--current-time",
@@ -108,6 +108,13 @@ async def cli():
         type=float,
         default=None,
         help="Override current time (epoch seconds) for testing. If omitted, uses system time.",
+    )
+    upkeep_little_liquidator_parser.add_argument(
+        "--min-collateral-to-keep",
+        "-mctk",
+        type=float,
+        default=2.0,
+        help="Minimum XCH collateral to keep before creating offers to convert excess to BYC (default: 2.0)",
     )
 
     ## protocol info ##
@@ -940,6 +947,7 @@ async def cli():
     )
 
     args = parser.parse_args()
+    log.warning("ARGSPARSE: %s", args.dd)
     # set log level based on verbosity
     if args.verbose:
         log_level = logging.DEBUG
@@ -994,7 +1002,7 @@ async def cli():
     except AssertionError as ae:
         # return error message with status
         result = {"error": str(ae)}
-
+    log.warning("dict store before: %s", args.dd)
     rpc_client = CircuitRPCClient(
         base_url=args.base_url,
         private_key=args.private_key,
@@ -1013,7 +1021,7 @@ async def cli():
         "MOJOS": data["mojos_per_xch"],
         "MCAT": 10 ** data["cat_decimals"],
     }
-    log.info("Protocol constants loaded successfully")
+    log.info("Protocol constants loaded successfully: %s",  rpc_client.store.path)
 
     if args.command == "upkeep" and args.action == "liquidator":
         from circuit_cli.little_liquidator import LittleLiquidator
@@ -1040,6 +1048,7 @@ async def cli():
             offer_expiry_seconds=getattr(args, "offer_expiry_seconds", 300),
             current_time=getattr(args, "current_time", None),
             progress_handler=progress_handler,
+            min_collateral_to_keep=getattr(args, "min_collateral_to_keep", 2.0),
         )
         if args.run_once:
             result = await liquidator.process_once()

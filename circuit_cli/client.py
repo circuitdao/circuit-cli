@@ -112,6 +112,7 @@ class CircuitRPCClient:
             - If no private_key is provided, operations requiring signatures will fail.
             - Call set_fee_per_cost() before submitting transactions when using presets.
         """
+        log.warning("Dict store path: %s", dict_store_path)
         # Setup console-friendly logging
         setup_console_logging()
 
@@ -1716,7 +1717,7 @@ class CircuitRPCClient:
         )
         return await self._process_transaction("/split_coin", payload)
 
-    async def offer_make(self, xch_amount: float, byc_amount: float, ignore_coin_names: list[str] = None, delay=600):
+    async def offer_make(self, xch_amount: float, byc_amount: float, ignore_coin_names: list[str] = None, expires_in_seconds=600):
         """
         Create an offer to trade assets.
 
@@ -1727,7 +1728,7 @@ class CircuitRPCClient:
                 "byc_amount": self._convert_number(byc_amount, "MCAT"),
                 "xch_amount": self._convert_number(xch_amount, "MOJOS"),
                 "ignore_coin_names": ignore_coin_names,
-                "delay": delay,
+                "expires_in_seconds": expires_in_seconds,
             }
         )
         resp = await self._make_api_request("POST", "/make_offer", payload)

@@ -82,7 +82,7 @@ async def fetch_dexie_market_depth(pay_asset: str = "XCH", receive_asset: str = 
                         last_price = float(ticker.get("last_price") or 0) if ticker.get("last_price") else 0
 
                         # Use last traded price as market reference; values are ratios (TBYC per XCH)
-                        relevant_price = 1 / last_price
+                        relevant_price = 1 / last_price * MCAT
 
                         # Assume sufficient depth if we have a valid price ratio
                         has_sufficient_depth = relevant_price > 0
@@ -185,6 +185,7 @@ class LittleLiquidator:
         offer_expiry_seconds: int = 600,  # 1 hour offer expiry
         current_time: float | None = None,  # testing: inject current time
         progress_handler=None,  # Progress handler for streaming updates
+        min_collateral_to_keep: float = 2.0,  # Minimum XCH to keep before creating offers
     ):
         self.rpc_client = rpc_client
         self.max_bid_milli_amount = max_bid_milli_amount
@@ -196,6 +197,7 @@ class LittleLiquidator:
         # If provided, use injected time value for deterministic testing; otherwise use wall clock
         self._injected_current_time = current_time
         self.progress_handler = progress_handler
+        self.min_collateral_to_keep = min_collateral_to_keep
 
     async def _emit_progress(self, event_data: dict):
         """Emit a progress event to the configured handler if set."""
@@ -338,12 +340,14 @@ class LittleLiquidator:
                 }
             )
             renewed_count = 0
+            
+            log.info(f"Starting renewal process for {len(expired_offers)} expired offers")
 
             for offer_id, offer_data in expired_offers:
                 try:
-                    # Get current market price ratio (TBYC/XCH) and convert to mTBYC/XCH price
-                    market_price_ratio = await fetch_dexie_price("XCH", "TBYC")
-                    current_market_price = (1 / market_price_ratio) * PRICE_PRECISION if market_price_ratio else 0
+                    # Get the current market price ratio (TBYC/XCH) and convert to mTBYC/XCH price
+                    market_price = await fetch_dexie_price("XCH", "TBYC")
+                    current_market_price = market_price / MCAT if market_price else 0
                     if not current_market_price or current_market_price <= 0:
                         # Fall back to last known market price from offer creation in offline/test envs
                         fallback_price = offer_data.get("market_price_at_creation")
@@ -365,6 +369,32 @@ class LittleLiquidator:
                         await self._remove_active_offer(offer_id)
                         continue
 
+                    # Get initial balance to track consumption across renewals
+                    ignore_coins = await self._get_ignore_coins()
+                    current_balances = await self.rpc_client.wallet_balances(ignore_coin_names=ignore_coins)
+                    remaining_balance_mojos = current_balances.get("xch", 0)
+                    # Check if we have enough balance to renew this offer
+                    xch_amount_mojos = int(xch_amount * MOJOS)
+                    available_xch = remaining_balance_mojos / MOJOS
+                    
+                    if xch_amount_mojos > remaining_balance_mojos:
+                        log.warning(
+                            f"Insufficient balance to renew offer {offer_id}: need {xch_amount:.6f} XCH, "
+                            f"only {available_xch:.6f} XCH available. Skipping renewal."
+                        )
+                        await self._emit_progress(
+                            {
+                                "event": "offer_renewal_skipped",
+                                "message": f"Skipping renewal of offer {offer_id} - insufficient balance ({available_xch:.6f} XCH available, {xch_amount:.6f} XCH needed)",
+                                "offer_id": offer_id,
+                                "renewal_number": renewal_count + 1,
+                                "xch_amount": xch_amount,
+                                "available_balance": available_xch,
+                            }
+                        )
+                        continue
+                    else:
+                        log.info(f"Sufficient balance for renewal of offer {offer_id} - {available_xch:.6f} XCH available, {xch_amount:.6f} XCH needed")
                     log.info(
                         f"Renewing expired offer {offer_id} (renewal #{renewal_count + 1}): {xch_amount} XCH at market price {current_market_price}"
                     )
@@ -381,7 +411,7 @@ class LittleLiquidator:
                     )
 
                     # Create new offer with current market conditions
-                    result = await self._create_offer_at_market_price(xch_amount, current_market_price)
+                    result = await self.create_and_upload_offer(xch_amount_mojos, current_market_price)
 
                     if result["success"]:
                         # Remove old offer and add new one
@@ -397,7 +427,11 @@ class LittleLiquidator:
                             await self._save_active_offers(active_offers)
 
                         renewed_count += 1
-                        log.info(f"Successfully renewed offer as {new_offer_id}")
+                        
+                        # Deduct consumed balance to track across multiple renewals
+                        remaining_balance_mojos -= xch_amount_mojos
+                        log.info(f"Successfully renewed offer as {new_offer_id} (remaining balance: {remaining_balance_mojos / MOJOS:.6f} XCH)")
+                        
                         await self._emit_progress(
                             {
                                 "event": "offer_renewal_success",
@@ -407,6 +441,7 @@ class LittleLiquidator:
                                 "renewal_number": renewal_count + 1,
                                 "xch_amount": xch_amount,
                                 "market_price": current_market_price,
+                                "remaining_balance": remaining_balance_mojos / MOJOS,
                             }
                         )
                     else:
@@ -431,137 +466,6 @@ class LittleLiquidator:
             log.error(f"Error in expired offer management: {e}")
             return 0
 
-    async def _create_offer_at_market_price(self, xch_amount: float, market_price: float):
-        """Create a new offer at current market price"""
-        try:
-            # Price slightly below market for quick execution
-            offer_price = market_price * 0.995  # 0.5% below market
-            byc_amount_to_receive = xch_amount * offer_price
-
-            await self._emit_progress(
-                {
-                    "event": "offer_creation_started",
-                    "message": f"Creating market offer - {xch_amount:.6f} XCH for {byc_amount_to_receive:.2f} TBYC at price {offer_price}",
-                    "offer_details": {
-                        "xch_amount": xch_amount,
-                        "byc_amount": byc_amount_to_receive,
-                        "offer_price": offer_price,
-                        "market_price": market_price,
-                    },
-                }
-            )
-
-            log.info(f"Creating market offer: {xch_amount} XCH for {byc_amount_to_receive:.2f} TBYC at {offer_price}")
-
-            # Get ignore coins to pass to offer creation
-            ignore_coins = await self._get_ignore_coins()
-
-            # Create the offer via RPC, excluding locked coins
-            offer_result = await self.rpc_client.offer_make(
-                xch_amount=xch_amount,
-                byc_amount=byc_amount_to_receive,
-                ignore_coin_names=ignore_coins,
-                delay=self.offer_expiry_seconds,
-            )
-
-            if offer_result and offer_result.get("bundle"):
-                # Lock the coins used in this offer
-                used_coins = offer_result.get("coins_used", [])
-                if used_coins:
-                    await self._lock_coins(used_coins)
-                    log.debug(f"Locked {len(used_coins)} coins for renewed offer")
-
-                # sign the offer bundle
-                unsigned_bundle = SpendBundle.from_json_dict(offer_result["offered_bundle"])
-                signed_bundle = await self.rpc_client.sign_bundle(unsigned_bundle)
-                unsigned_offer = Offer.from_spend_bundle(unsigned_bundle)
-                offer = Offer(unsigned_offer.requested_payments, signed_bundle, unsigned_offer.driver_dict)
-                assert offer.is_valid()
-                # Upload to dexie.space
-                offer_data = {
-                    "offer": offer.to_bech32(),
-                }
-
-                await self._emit_progress(
-                    {
-                        "event": "offer_file_summary",
-                        "message": "Created offer file",
-                        "offer_details": offer.summary(),
-                    }
-                )
-                upload_result = await upload_offer_to_dexie(offer_data, self._emit_progress)
-                if upload_result:
-                    offer_id = upload_result.get("id", f"local_{int(self._now())}")
-                    log.info(f"Successfully uploaded renewed offer to dexie.space: {offer_id}")
-
-                    await self._emit_progress(
-                        {
-                            "event": "offer_creation_success",
-                            "message": f"Successfully created and uploaded market offer {offer_id} - {xch_amount:.6f} XCH for {byc_amount_to_receive:.2f} TBYC",
-                            "offer_id": offer_id,
-                            "dexie_upload": True,
-                            "offer_details": {
-                                "xch_amount": xch_amount,
-                                "byc_amount": byc_amount_to_receive,
-                                "offer_price": offer_price,
-                            },
-                        }
-                    )
-
-                    return {"success": True, "offer_id": offer_id, "dexie_id": offer_id}
-                else:
-                    offer_id = f"local_{int(self._now())}"
-                    log.info("Renewed offer created locally but not uploaded to dexie.space")
-
-                    await self._emit_progress(
-                        {
-                            "event": "offer_creation_partial_success",
-                            "message": f"Created market offer {offer_id} locally but failed to upload to Dexie - {xch_amount:.6f} XCH for {byc_amount_to_receive:.2f} TBYC",
-                            "offer_id": offer_id,
-                            "dexie_upload": False,
-                            "offer_details": {
-                                "xch_amount": xch_amount,
-                                "byc_amount": byc_amount_to_receive,
-                                "offer_price": offer_price,
-                            },
-                        }
-                    )
-
-                    return {"success": False, "offer_id": offer_id, "local_only": True}
-            else:
-                log.error(f"Failed to create renewed offer: {offer_result}")
-
-                await self._emit_progress(
-                    {
-                        "event": "offer_creation_failed",
-                        "message": f"Failed to create market offer for {xch_amount:.6f} XCH - RPC call failed",
-                        "error": "Offer RPC creation failed",
-                        "offer_details": {
-                            "xch_amount": xch_amount,
-                            "byc_amount": byc_amount_to_receive,
-                            "offer_price": offer_price,
-                        },
-                    }
-                )
-
-                return {"success": False, "error": "Offer creation failed"}
-
-        except Exception as e:
-            log.exception(f"Failed to create renewed offer: {e}")
-
-            await self._emit_progress(
-                {
-                    "event": "offer_creation_failed",
-                    "message": f"Failed to create market offer for {xch_amount:.6f} XCH - {str(e)}",
-                    "error": str(e),
-                    "offer_details": {
-                        "xch_amount": xch_amount if "xch_amount" in locals() else 0,
-                        "target_byc_amount": byc_amount_to_receive if "byc_amount_to_receive" in locals() else 0,
-                    },
-                }
-            )
-
-            return {"success": False, "error": str(e)}
 
     async def get_offers_status(self):
         """Get status of all active offers for monitoring"""
@@ -590,8 +494,8 @@ class LittleLiquidator:
             return {"total_offers": 0, "offers": [], "error": str(e)}
 
     async def _get_xch_price(self):
-        market_price_ratio = await fetch_dexie_price("XCH", "TBYC")
-        return (1 / market_price_ratio) * PRICE_PRECISION if market_price_ratio else 0
+        market_price = await fetch_dexie_price("XCH", "TBYC")
+        return market_price * PRICE_PRECISION if market_price else 0
 
     async def _split_large_coins(self):
         """Split large XCH coins into smaller chunks suitable for offers"""
@@ -951,8 +855,101 @@ class LittleLiquidator:
                     {"event": "bad_debts_recovered", "message": f"Recovered {bad_debts_recovered} bad debts"}
                 )
 
+            # Check if we have excess collateral to convert to BYC during normal cycles
+            # await self._check_and_create_collateral_offers(balances, result)
+
         await self._emit_progress({"event": "completed", "message": "Liquidation process completed", "done": True})
         return result
+
+    async def _check_and_create_collateral_offers(self, balances, result):
+        """
+        Check if we have excess collateral above the minimum threshold and create offers to convert it to BYC.
+        
+        Args:
+            balances: Current wallet balances
+            result: Result dictionary to update with offer creation info
+        """
+        try:
+            # Get current XCH balance
+            xch_balance_mojos = balances.get("xch", 0)
+            xch_balance = xch_balance_mojos / MOJOS
+            
+            if xch_balance <= self.min_collateral_to_keep:
+                log.debug(f"XCH balance {xch_balance:.6f} is at or below minimum threshold {self.min_collateral_to_keep:.6f}")
+                return
+            log.debug(f"XCH balance is above minimum threshold: {xch_balance:.6f} <= {self.min_collateral_to_keep:.6f}")
+            # Calculate excess collateral
+            excess_xch = xch_balance - self.min_collateral_to_keep
+            
+            if excess_xch < 0.01:  # Only create offers for meaningful amounts (> 0.01 XCH)
+                log.debug(f"Excess XCH {excess_xch:.6f} too small to create offers")
+                return
+            
+            log.info(f"Excess collateral detected: {excess_xch:.6f} XCH (balance: {xch_balance:.6f}, minimum: {self.min_collateral_to_keep:.6f})")
+            
+            # Get current market price from Dexie
+            market_price = await fetch_dexie_price("XCH", "TBYC")
+            
+            if not market_price:
+                log.warning("Cannot get market price from Dexie, skipping collateral offer creation")
+                return
+            
+            # Convert market price to the format expected by offer creation
+            market_price_byc = market_price / MCAT
+            
+            await self._emit_progress(
+                {
+                    "event": "excess_collateral_detected",
+                    "message": f"Creating offers for excess collateral: {excess_xch:.6f} XCH at market price {market_price_byc:.2f}",
+                    "excess_xch": excess_xch,
+                    "market_price": market_price_byc,
+                }
+            )
+            
+            # Create offers for the excess collateral, passing available balance
+            excess_xch_mojos = int(excess_xch * MOJOS)
+            multiple_offers_result = await self.create_multiple_offers(
+                excess_xch_mojos, market_price_byc, collateral_balance_available=xch_balance_mojos
+            )
+            
+            if multiple_offers_result["total_success"] > 0:
+                log.info(f"Successfully created {multiple_offers_result['total_success']} collateral offers for {excess_xch:.6f} XCH")
+                
+                # Update result with collateral offers
+                if "collateral_offers_created" not in result["actions_taken"]:
+                    result["actions_taken"]["collateral_offers_created"] = []
+                result["actions_taken"]["collateral_offers_created"].extend(multiple_offers_result["successful_offers"])
+                
+                await self._emit_progress(
+                    {
+                        "event": "collateral_offers_created",
+                        "message": f"Created {multiple_offers_result['total_success']} offers from excess collateral",
+                        "offers_created": multiple_offers_result["total_success"],
+                        "excess_xch_used": excess_xch,
+                    }
+                )
+                
+                for offer_result in multiple_offers_result["successful_offers"]:
+                    if offer_result.get("dexie_id"):
+                        log.info(f"Collateral offer uploaded to dexie.space with ID: {offer_result['dexie_id']}")
+                        
+            else:
+                log.warning(f"Failed to create any collateral offers: {multiple_offers_result}")
+                await self._emit_progress(
+                    {
+                        "event": "collateral_offers_failed",
+                        "message": f"Failed to create offers from excess collateral: {multiple_offers_result.get('error', 'Unknown error')}",
+                    }
+                )
+                
+        except Exception as e:
+            log.exception(f"Error checking and creating collateral offers: {e}")
+            await self._emit_progress(
+                {
+                    "event": "collateral_check_error",
+                    "message": f"Error during collateral offer creation: {e}",
+                }
+            )
 
     async def start_auctions(self, vaults_pending):
         log.info("Found vaults pending liquidation: %s", vaults_pending)
@@ -1040,7 +1037,7 @@ class LittleLiquidator:
 
             # Calculate bid amount
             xch_to_acquire = self.calculate_acquired_xch(mbyc_bid_amount, available_xch, auction_price_per_xch)
-
+            log.debug(f"XCH to acquire with BYC bid: {xch_to_acquire:.6f} with bid amount: {mbyc_bid_amount:.2f}")
             # if bid amount is less than 1, then there's no need to bid
             if mbyc_bid_amount < 1:
                 log.info("We don't have any byc left, skipping")
@@ -1099,17 +1096,27 @@ class LittleLiquidator:
                 }
                 log.info(f"TAX_EVENT: {json.dumps(tax_data)}")
 
-                # After successful bid, create and upload offer to dexie.space
-                offer_result = await self.create_and_upload_offer(xch_to_acquire, market_check["market_price"])
-                if offer_result["success"]:
-                    log.info(f"Successfully created offer for {xch_to_acquire / MOJOS} XCH")
-                    if offer_result.get("offer_bech32"):
-                        offers_created.append(offer_result)
-                    if offer_result.get("dexie_id"):
-                        log.info(f"Offer uploaded to dexie.space with ID: {offer_result['dexie_id']}")
+                # After a successful bid, create multiple offers based on max_offer_amount
+                # Pass the current XCH balance to prevent creating more offers than available
+                current_xch_balance = current_balances.get("xch", 0)
+                multiple_offers_result = await self.create_multiple_offers(
+                    xch_to_acquire, market_check["market_price"], collateral_balance_available=current_xch_balance
+                )
+                
+                if multiple_offers_result["total_success"] > 0:
+                    log.info(f"Successfully created {multiple_offers_result['total_success']} offers for {xch_to_acquire / MOJOS} XCH")
+                    offers_created.extend(multiple_offers_result["successful_offers"])
+                    
+                    for offer_result in multiple_offers_result["successful_offers"]:
+                        if offer_result.get("dexie_id"):
+                            log.info(f"Offer uploaded to dexie.space with ID: {offer_result['dexie_id']}")
+                    
+                    log.info("Total offers created: %s", len(offers_created))
+                    if multiple_offers_result["total_failed"] > 0:
+                        log.warning(f"{multiple_offers_result['total_failed']} offers failed to create")
                     break
                 else:
-                    log.error(f"Failed to create offer for acquired XCH: {offer_result}")
+                    log.error(f"Failed to create any offers for acquired XCH: {multiple_offers_result}")
 
             except APIError as e:
                 log.error("Failed to bid on auction for vault %s: %s", vault_name, e)
@@ -1130,20 +1137,24 @@ class LittleLiquidator:
         # Determine required BYC to be able to bid up to max_bid_amount (in BYC units)
         vault_debt = vault_info["debt"] or 0
         # calculate minimum bid required by calculating relative and taking max out of it relative or flat
+        log.debug(f"Vault debt: {vault_debt} | min_bid_amount_bps: {min_bid_amount_bps} | min_bid_amount_flat: {min_bid_amount_flat}")
         min_relative_bid_amount = (vault_debt * min_bid_amount_bps) / PRECISION_BPS
+        log.debug(f"Picking bid amount from values: {min_relative_bid_amount} {min_bid_amount_flat}")
         required = max(min_relative_bid_amount, min_bid_amount_flat)
         log.info(f"My TBYC balance: {byc_balance} | Required to bid up to max: {required}")
         if byc_balance < required:
             log.info("Not enough TBYC to bid up to max amount, skipping")
             return -1
         if self.max_bid_milli_amount:
-            return min(byc_balance - required, self.max_bid_milli_amount, vault_debt)
+            if self.max_bid_milli_amount < required:
+                raise ValueError(f"Max bid amount is too low: {self.max_bid_milli_amount} < {required}")
+            return min(byc_balance, self.max_bid_milli_amount, vault_debt)
         else:
-            return min(byc_balance - required, vault_debt)
+            return min(byc_balance, vault_debt)
 
     def calculate_acquired_xch(self, byc_bid_amount, available_xch, bid_price_per_xch):
         log.debug(f"Calculating xch to acquire with params: {self.max_bid_milli_amount}, {bid_price_per_xch}")
-        xch_to_acquire = ((byc_bid_amount / 1000) / (bid_price_per_xch / 100)) * MOJOS
+        xch_to_acquire = ((byc_bid_amount) / (bid_price_per_xch / 100)) * MOJOS
         log.debug(f"XCH to acquire: {xch_to_acquire} vs available: {available_xch}")
         return xch_to_acquire
 
@@ -1160,10 +1171,10 @@ class LittleLiquidator:
         """
 
         # Get TBYC/XCH ratio from Dexie API
-        market_price_ratio = await fetch_dexie_price("XCH", "TBYC")
+        market_price = await fetch_dexie_price("XCH", "TBYC")
 
         # If price API fails or returns 0, assume favorable test conditions
-        if not market_price_ratio:
+        if not market_price:
             log.info("TBYC price unavailable, testing liquidator assumes market conditions are favorable")
             return {
                 "profitable": True,
@@ -1175,7 +1186,7 @@ class LittleLiquidator:
             }
 
         # Convert market_price_ratio (TBYC/XCH) to market price (mTBYC/XCH) for comparison
-        market_price_byc = (1 / market_price_ratio) * PRICE_PRECISION
+        market_price_byc = market_price / MCAT
         auction_price_byc = auction_price_per_xch / PRICE_PRECISION
         # Calculate discount from market price
         discount = (market_price_byc - auction_price_byc) / market_price_byc if market_price_byc > 0 else 0
@@ -1198,6 +1209,120 @@ class LittleLiquidator:
             else f"Discount {discount:.2%} < required {self.min_discount:.2%}",
         }
 
+    async def create_multiple_offers(self, total_xch_amount, market_price, collateral_balance_available=None):
+        """
+        Create multiple offers for the acquired XCH based on max_offer_amount constraint.
+        
+        Args:
+            total_xch_amount: Total amount of XCH to sell (in mojos)
+            market_price: Market price to use for the offers
+            collateral_balance_available: Available XCH balance for creating offers (in mojos).
+                                         If None, will fetch current balance.
+            
+        Returns:
+            dict: Summary of offer creation results
+        """
+        total_xch_whole = total_xch_amount / MOJOS
+        max_offer_xch = self.max_offer_amount
+        
+        # Get available collateral balance if not provided
+        if collateral_balance_available is None:
+            ignore_coins = await self._get_ignore_coins()
+            balances = await self.rpc_client.wallet_balances(ignore_coin_names=ignore_coins)
+            collateral_balance_available = balances.get("xch", 0)
+            log.info(f"Fetched current XCH balance: {collateral_balance_available / MOJOS:.6f} XCH")
+        
+        available_xch_whole = collateral_balance_available / MOJOS
+        log.info(f"Available collateral for offers: {available_xch_whole:.6f} XCH")
+        
+        # Limit total XCH to what's actually available
+        if total_xch_amount > collateral_balance_available:
+            log.warning(
+                f"Requested {total_xch_whole:.6f} XCH exceeds available balance {available_xch_whole:.6f} XCH. "
+                f"Limiting offers to available balance."
+            )
+            total_xch_amount = collateral_balance_available
+            total_xch_whole = total_xch_amount / MOJOS
+        
+        # Calculate how many offers we need to create
+        if total_xch_whole <= max_offer_xch:
+            # Single offer is sufficient
+            offers_to_create = [(total_xch_amount,)]
+        else:
+            # Split into multiple offers
+            offers_to_create = []
+            remaining_xch = total_xch_amount
+            
+            while remaining_xch > 0:
+                # Determine the size of the next offer
+                if remaining_xch / MOJOS <= max_offer_xch:
+                    # Last offer - use all remaining XCH
+                    offer_xch_amount = remaining_xch
+                else:
+                    # Create an offer of max_offer_amount size
+                    offer_xch_amount = int(max_offer_xch * MOJOS)
+                
+                offers_to_create.append((offer_xch_amount,))
+                remaining_xch -= offer_xch_amount
+        
+        log.info(f"Creating {len(offers_to_create)} offers for {total_xch_whole:.6f} XCH (max per offer: {max_offer_xch} XCH)")
+        
+        # Track results and remaining balance
+        successful_offers = []
+        failed_offers = []
+        remaining_balance = collateral_balance_available
+        
+        # Create each offer
+        for i, (xch_amount,) in enumerate(offers_to_create):
+            # Check if we still have enough balance for this offer
+            if xch_amount > remaining_balance:
+                log.warning(
+                    f"Insufficient balance for offer {i+1}: need {xch_amount / MOJOS:.6f} XCH, "
+                    f"only {remaining_balance / MOJOS:.6f} XCH available. Skipping remaining offers."
+                )
+                failed_offers.append({
+                    "xch_amount": xch_amount / MOJOS,
+                    "error": f"Insufficient balance: {remaining_balance / MOJOS:.6f} XCH available"
+                })
+                break
+            
+            log.info(f"Creating offer {i+1}/{len(offers_to_create)}: {xch_amount / MOJOS:.6f} XCH (balance: {remaining_balance / MOJOS:.6f} XCH)")
+            
+            try:
+                offer_result = await self.create_and_upload_offer(xch_amount, market_price * (1.05 - (i/100)))
+                
+                if offer_result["success"]:
+                    successful_offers.append(offer_result)
+                    # Deduct the used amount from remaining balance
+                    remaining_balance -= xch_amount
+                    log.info(f"Successfully created offer {i+1}: {xch_amount / MOJOS:.6f} XCH (remaining balance: {remaining_balance / MOJOS:.6f} XCH)")
+                else:
+                    failed_offers.append({
+                        "xch_amount": xch_amount / MOJOS,
+                        "error": offer_result.get("error", "Unknown error")
+                    })
+                    log.error(f"Failed to create offer {i+1}: {offer_result}")
+                    
+            except Exception as e:
+                failed_offers.append({
+                    "xch_amount": xch_amount / MOJOS,
+                    "error": str(e)
+                })
+                log.exception(f"Exception creating offer {i+1}: {e}")
+        
+        result = {
+            "total_offers_attempted": len(offers_to_create),
+            "total_success": len(successful_offers),
+            "total_failed": len(failed_offers),
+            "successful_offers": successful_offers,
+            "failed_offers": failed_offers,
+            "total_xch_amount": total_xch_whole,
+            "remaining_balance": remaining_balance / MOJOS
+        }
+        
+        log.info(f"Offer creation summary: {result['total_success']}/{result['total_offers_attempted']} successful, remaining balance: {remaining_balance / MOJOS:.6f} XCH")
+        return result
+
     async def create_and_upload_offer(self, xch_amount, market_price):
         """
         Create an offer for selling XCH and upload it to dexie.space.
@@ -1207,12 +1332,36 @@ class LittleLiquidator:
             market_price: Market price to use for the offer
         """
         try:
+            log.debug("Creating offer with params: %s, %s", xch_amount, market_price)
             xch_amount_in_whole = xch_amount / MOJOS
 
-            # Price the offer competitively (slightly below market to ensure execution)
-            offer_price = market_price / PRICE_PRECISION * 0.995  # 0.5% below market
-            byc_amount_to_receive = xch_amount_in_whole * offer_price
+            # Get ignore coins to pass to offer creation
+            ignore_coins = await self._get_ignore_coins()
+            
+            # Check if we have enough balance before attempting to create the offer
+            current_balances = await self.rpc_client.wallet_balances(ignore_coin_names=ignore_coins)
+            available_xch_mojos = current_balances.get("xch", 0)
+            available_xch = available_xch_mojos / MOJOS
+            
+            if xch_amount > available_xch_mojos:
+                error_msg = f"Insufficient balance to create offer: need {xch_amount_in_whole:.6f} XCH, only {available_xch:.6f} XCH available"
+                log.warning(error_msg)
+                await self._emit_progress(
+                    {
+                        "event": "offer_creation_failed",
+                        "message": error_msg,
+                        "error": "Insufficient balance",
+                        "offer_details": {
+                            "xch_amount_requested": xch_amount_in_whole,
+                            "xch_amount_available": available_xch,
+                        },
+                    }
+                )
+                return {"success": False, "error": error_msg}
 
+            # Price the offer competitively (slightly below market to ensure execution)
+            offer_price = market_price * 0.995  # 0.5% below market
+            byc_amount_to_receive = xch_amount_in_whole * offer_price
             await self._emit_progress(
                 {
                     "event": "offer_creation_started",
@@ -1228,21 +1377,19 @@ class LittleLiquidator:
 
             log.info(f"Creating offer: {xch_amount_in_whole} XCH for {byc_amount_to_receive:.2f} TBYC at {offer_price}")
 
-            # Get ignore coins to pass to offer creation
-            ignore_coins = await self._get_ignore_coins()
-
             # Create the offer via RPC, excluding locked coins
+            # FIXME: this reuses coins which it shouldn't
             offer_result = await self.rpc_client.offer_make(
                 xch_amount=xch_amount_in_whole,
                 byc_amount=byc_amount_to_receive,
                 ignore_coin_names=ignore_coins,
-                delay=self.offer_expiry_seconds,
+                expires_in_seconds=self.offer_expiry_seconds,
             )
             log.debug(f"Offer result: {offer_result}")
 
             if offer_result and offer_result.get("bundle"):
                 # Lock the coins used in this offer
-                used_coins = offer_result.get("coins_used", [])
+                used_coins = offer_result.get("used_coin_names", [])
                 if used_coins:
                     await self._lock_coins(used_coins)
                     log.debug(f"Locked {len(used_coins)} coins for offer")
