@@ -1142,6 +1142,8 @@ class CircuitRPCClient:
 
     async def upkeep_announcers_approve(self, coin_name=None, create_conditions=False, bill_coin_name=None, label=None):
 
+        assert create_conditions or bill_coin_name is not None, "Must specify either -c or -b option"
+
         if create_conditions:
             assert bill_coin_name is None, "Cannot create custom conditions and implement bill at the same time"
             response = await self.client.post(
@@ -1167,7 +1169,6 @@ class CircuitRPCClient:
                     label = bill_coin_name[1:-1]
                     bill_coin_name = self.store.get(f"proposals.propose.coins.{label}")
 
-            assert bill_coin_name is not None, "Must specify bill to implement when not creating custom conditions"
             bill_response = await self.client.post(
                 "/bills/implement",
                 json={
@@ -1205,6 +1206,9 @@ class CircuitRPCClient:
             return sig_response
 
     async def upkeep_announcers_disapprove(self, coin_name, create_conditions=False, bill_coin_name=None):
+
+        assert create_conditions or bill_coin_name is not None, "Must specify either -c or -b option"
+
         if create_conditions:
             assert bill_coin_name is None, "Cannot create custom conditions and implement bill at the same time"
             print(f"Generating custom conditions for bill to disapprove announcer {coin_name}")
@@ -1222,7 +1226,6 @@ class CircuitRPCClient:
                 response.raise_for_status()
             return response.json()
         else:
-            assert bill_coin_name is not None, "Must specify bill to implement when not creating custom conditions"
             print(f"Implementing bill {bill_coin_name} to disapprove announcer {coin_name}")
             bill_response = await self.client.post(
                 "/bills/implement",
@@ -1262,13 +1265,7 @@ class CircuitRPCClient:
 
     async def upkeep_announcers_penalize(self, coin_name=None):
         if coin_name is None:
-            response = await self.client.post(
-                "/announcers",
-                json={
-                    "synthetic_pks": [],
-                    "penalizable": True,
-                },
-            )
+            response = await self.client.post("/announcers", json={"penalizable": True})
             data = response.json()
             if len(data) == 0:
                 return {"status": "failed", "error": "no penalizable announcer found"}
@@ -1565,19 +1562,41 @@ class CircuitRPCClient:
             return sig_response
 
     ## Vaults ##
-    async def upkeep_vaults_list(self, coin_name=None, seized=None, not_seized=None):
-        if seized and not_seized:
-            return []
-
-        if not_seized:
-            seized = False
-        elif seized is None:
-            seized = None
+    async def upkeep_vaults_list(
+            self, coin_name=None, transferrable_stability_fees=False, liquidatable=False, startable=False, restartable=False,
+            in_liquidation=False, biddable=False, in_bad_debt=False, seized=False, not_seized=False
+    ):
+        if not seized:
+            if not not_seized:
+                seized = None
+            else: seized = False
+        else: seized = True
+        if not transferrable_stability_fees:
+            transferrable_stability_fees = None
+        if not liquidatable:
+            liquidatable = None
+        if not startable:
+            startable = None
+        if not restartable:
+            restartable = None
+        if not in_liquidation:
+            in_liquidation = None
+        if not biddable:
+            biddable = None
+        if not in_bad_debt:
+            in_bad_debt = None
 
         if coin_name:
             response = await self.client.post(
                 f"/vaults/{coin_name}/",
                 json={
+                    "transferrable_sf": transferrable_stability_fees,
+                    "liquidatable": liquidatable,
+                    "startable": startable,
+                    "restartable": restartable,
+                    "in_liquidation": in_liquidation,
+                    "biddable": biddable,
+                    "in_bad_debt": in_bad_debt,
                     "seized": seized,
                 },
             )
@@ -1586,6 +1605,13 @@ class CircuitRPCClient:
         response = await self.client.post(
             "/vaults",
             json={
+                "transferrable_sf": transferrable_stability_fees,
+                "liquidatable": liquidatable,
+                "startable": startable,
+                "restartable": restartable,
+                "in_liquidation": in_liquidation,
+                "biddable": biddable,
+                "in_bad_debt": in_bad_debt,
                 "seized": seized,
             },
         )
@@ -1613,7 +1639,7 @@ class CircuitRPCClient:
             },
             headers={"Content-Type": "application/json"},
         )
-        if response.is_error:  # response.status_code != 200:
+        if response.is_error:
             try:
                 log.warning(response.json().get("detail"))
             except Exception:
