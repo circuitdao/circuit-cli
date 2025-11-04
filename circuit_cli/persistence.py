@@ -4,7 +4,8 @@ import tempfile
 import time
 from contextlib import contextmanager
 from typing import Any, Dict
-
+import logging
+log = logging.getLogger(__name__)
 
 HOME_DIR = os.path.expanduser("~")
 CIRCUIT_DIR = os.path.join(HOME_DIR, ".circuit")
@@ -24,7 +25,8 @@ class DictStore:
     - Safe for multi-process use on the same machine
     """
 
-    def __init__(self, dir_path=CIRCUIT_DIR, path="state.json", lock_path=".state.lock"):
+    def __init__(self, dir_path, path="state.json", lock_path=".state.lock"):
+        log.info(f"Initializing persistence store at {dir_path}")
         if dir_path is None:
             dir_path = CIRCUIT_DIR
         self.path = os.path.join(dir_path, path)
@@ -101,6 +103,7 @@ class DictStore:
         return self._read()
 
     def get(self, key: str, default: Any = None) -> Any:
+
         return self._read().get(key, default)
 
     def set(self, key: str, value: Any) -> None:

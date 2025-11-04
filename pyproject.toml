@@ -1,17 +1,22 @@
-[tool.poetry]
+[project]
 name = "circuit-cli"
 version = "0.9.0"
 description = "CLI tool to manage your Circuit collateral vault, savings and upkeep the protocol/DAO"
-authors = ["trepca <set@circuitdao.com>", "nimcon <nin@circuitdao.com>"]
+authors = [
+    {name = "trepca", email = "set@circuitdao.com"},
+    {name = "nimcon", email = "nin@circuitdao.com"}
+]
 readme = "README.md"
 keywords = ["circuit", "chia", "blockchain", "dao", "cli"]
-homepage = "https://circuitdao.com"
-repository = "https://github.com/circuitdao/circuit-cli"
-license = "Proprietary"
+license = {text = "Proprietary"}
+requires-python = "^3.11"
+dependencies = []
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Environment :: Console",
   "Intended Audience :: Developers",
   "License :: Other/Proprietary License",
@@ -19,21 +24,25 @@ classifiers = [
   "Topic :: Utilities",
 ]
 
+[project.urls]
+Homepage = "https://circuitdao.com"
+Repository = "https://github.com/circuitdao/circuit-cli"
+"Bug Tracker" = "https://github.com/circuitdao/circuit-cli/issues"
+Source = "https://github.com/circuitdao/circuit-cli"
+
+[project.scripts]
+circuit-cli = "circuit_cli.circuit_rpc_cli:main"
+
+[tool.poetry]
+
 [tool.poetry.dependencies]
 python = "^3.11"
 httpx = "^0.28.1"
-chia-blockchain = "2.5.5"
-
-[tool.poetry.urls]
-"Bug Tracker" = "https://github.com/circuitdao/circuit-cli/issues"
-"Source" = "https://github.com/circuitdao/circuit-cli"
+chia-blockchain = "2.5.7rc3"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
-
-[tool.poetry.scripts]
-circuit-cli = "circuit_cli.circuit_rpc_cli:main"
 
 [tool.ruff]
 line-length = 120
