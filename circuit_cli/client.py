@@ -179,9 +179,6 @@ class CircuitRPCClient:
             response_data = await self._make_api_request("POST", "/statutes", {"full": False})
             fee_per_costs = response_data.get("fee_per_costs")
             self.fee_per_cost = fee_per_costs.get(self._fee_per_cost)
-            if self._fee_per_cost == "fast":
-                # TODO: amplify fullnode estimates via arg
-                self.fee_per_cost = 12
         else:
             self.fee_per_cost = float(self._fee_per_cost)
         log.info("Set fee_per_cost to: %s", self.fee_per_cost)

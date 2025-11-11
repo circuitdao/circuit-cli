@@ -1052,12 +1052,6 @@ To get paid a different amount of interest (incl 0), specify the desired value v
             await liquidator.run(run_once=False)
         return
 
-    # In text mode, show which HTTP endpoints are being used
-    try:
-        rpc_client.show_endpoints = not args.json
-    except AttributeError:
-        pass
-
     # Set progress handler if requested
     if args.progress != "off":
         if args.progress == "json":
