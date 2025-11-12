@@ -19,7 +19,7 @@ class CircuitJSONFormatter:
         self.amount_patterns = [
             #r".*amount.*",
             #r".*_balance.*",
-            r".*deposit.*",
+            r"^(?!.*\b(min_deposit)\b).*deposit.*",
             #r".*value.*",
             #r".*min_.*",
             #r".*max_.*",
@@ -32,6 +32,7 @@ class CircuitJSONFormatter:
             r"^(?!.*\b(in_bad_debt)\b).*debt.*",
             r".*principal.*",
             r"^recharge_auction_(minimum|maximum)_bid$",
+            r".*repay.*",
             r"^(?!.*df.*).*stability_fee.*", #r".*stability_fee.*",
             r"^surplus_auction_lot$",
             r".*treasury_(delta|minimum|maximum).*",
@@ -47,6 +48,7 @@ class CircuitJSONFormatter:
         ]
 
         self.xch_patterns = [
+            r".*min_deposit.*",
             r"^(?!.*\b(collateral_ratio)\b).*collateral.*",
             r"^(?!.*(stability|initiator).*).*fee.*",
             r".*withdraw.*",
@@ -353,9 +355,13 @@ class CircuitJSONFormatter:
                 return f"{value:.6f}".rstrip("0").rstrip(".")
 
         # Handle strings
+        do_not_truncate = [
+            "approval_mod_hashes_serialized",
+            "statutes_struct_serialized",
+        ]
         if isinstance(value, str):
             # Truncate very long strings
-            if len(value) > 100:
+            if len(value) > 100 and key_lower not in do_not_truncate:
                 return f"{value[:50]}...{value[-47:]}"
 
         return str(value)
