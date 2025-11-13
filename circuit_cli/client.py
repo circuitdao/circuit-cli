@@ -473,7 +473,7 @@ class CircuitRPCClient:
                         yield evf
                         raise ValueError(f"Transaction failed. ID {tx_id}")
                     log.info(f"Still waiting for confirmation of transaction ID {tx_id}")
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(20)
 
             if stream:
                 return _wait_gen()
