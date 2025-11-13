@@ -38,7 +38,7 @@ circuit-cli = "circuit_cli.circuit_rpc_cli:main"
 [tool.poetry.dependencies]
 python = "^3.11"
 httpx = "^0.28.1"
-chia-blockchain = "2.5.7rc3"
+chia-blockchain = "2.5.7"
 
 [build-system]
 requires = ["poetry-core"]
