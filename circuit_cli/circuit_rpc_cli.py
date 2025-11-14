@@ -655,7 +655,7 @@ async def cli():
     bills_propose_parser.add_argument(
         "--max-delta", type=int, default=None, help="Max absolute amount by which Statues value may change"
     )
-    bills_propose_parser.add_argument("-s", "--skip-verify", action="store_true", help="Skip statutes integrity checks")
+    #bills_propose_parser.add_argument("-s", "--skip-verify", action="store_true", help="Skip statutes integrity checks")
     bills_propose_parser.add_argument(
         "-l", "--label", type=str, help="Tag this coin with a label that can be used to identify it in other operations"
     )

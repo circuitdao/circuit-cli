@@ -6,6 +6,7 @@ from math import floor
 from typing import Any, Dict, Optional
 
 import httpx
+from httpx import AsyncClient
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
     puzzle_hash_for_synthetic_public_key,
 )
@@ -13,7 +14,8 @@ from chia.wallet.trading.offer import Offer
 from chia_rs import Coin, PrivateKey, SpendBundle
 from circuit_cli.persistence import DictStore
 from circuit_cli.utils import generate_ssks, sign_spends
-from httpx import AsyncClient
+from circuit_cli.verify_statutes import verify_statutes
+
 
 log = logging.getLogger(__name__)
 
@@ -1871,7 +1873,7 @@ class CircuitRPCClient:
         """Reset a bill on a governance coin back to empty state."""
         # Get coin name if not provided, using custom logic for empty bills
         if not coin_name:
-            payload = self._build_base_payload(include_spent_coins=False, empty_only=True)
+            payload = self._build_base_payload(include_spent_coins=False, empty=True)
             data = await self._make_api_request("POST", "/bills", payload)
             assert len(data) > 0, "No bills found"
             assert len(data) == 1, "More than one bill found. Must specify governance coin name"
@@ -1891,16 +1893,31 @@ class CircuitRPCClient:
         veto_interval=None,
         implementation_delay=None,
         max_delta=None,
-        skip_verify=False,
         label=None,
     ):
         assert index is not None, "Must specify Statute index (between -1 and 42 included)"
 
-        # Get coin name if not provided, using custom logic for empty bills
+        statutes_full_output = await self.statutes_list(full=True)
+        statute_indices = statutes_full_output["statute_labels"]
+
+        # Verify Statutes
+        if not force:
+            #print(f"{statutes_full_output=}")
+            expected_statutes = statutes_full_output["full_implemented_statutes"] # TODO: account for pending proposals
+            if not verify_statutes(
+                    statute_indices, expected_statutes, index, value,
+                    proposal_threshold, veto_interval, implementation_delay, max_delta
+            ):
+                return "To force proposal specify -f option"
+
+        # Get coin name if not provided, pick a suitable governance coin
         if coin_name is None:
-            payload = self._build_base_payload(include_spent_coins=False, empty_only=True)
+            statute_name = statute_indices[index][0]
+            proposal_threshold = statutes_full_output["full_implemented_statutes"][statute_name]["threshold_amount_to_propose"] + 1
+            payload = self._build_base_payload(include_spent_coins=False, empty=True, min_amount=proposal_threshold)
             data = await self._make_api_request("POST", "/bills", payload)
-            assert len(data) > 0, "No governance coin with empty bill found"
+            if not data:
+                return "No governance coin with empty bill and amount in excess of proposal threshold found"
             coin_name = data[0]["name"]
 
         if value is not None:
@@ -1921,8 +1938,6 @@ class CircuitRPCClient:
                 "veto_seconds": self._convert_number(veto_interval),
                 "delay_seconds": self._convert_number(implementation_delay),
                 "max_delta": self._convert_number(max_delta),
-                "force": force,
-                "verify": not skip_verify,
             }
         )
         tx_result = await self._process_transaction("/bills/propose", payload)
@@ -1942,14 +1957,15 @@ class CircuitRPCClient:
 
     async def bills_implement(self, coin_name=None):
         if coin_name is None:
-            payload = self._build_base_payload(include_spent_coins=False, empty_only=False, non_empty_only=True)
+            payload = self._build_base_payload(include_spent_coins=False, implementable=True) #empty_only=False, non_empty_only=True)
             data: list = await self._make_api_request("POST", "/bills", payload)
 
             if coin_name:
                 coins = [coin for coin in data if coin["name"] == coin_name]
             else:
+                if not data:
+                    return "No implementable bills found"
                 coins = sorted(data, key=lambda x: x["status"]["implementable_in"])
-                assert len(coins) > 0, "There are no proposed bills"
                 assert coins[0]["status"]["implementable_in"] <= 0, "No implementable bill found"
                 coin_name = coins[0]["name"]
         else:
