@@ -76,7 +76,7 @@ def parse(s: str) -> int | float:
 
 
 def verify_statutes(
-        statute_indices: list[tuple[int, str]],
+        statute_indices: list[tuple[str, int]],
         full_statutes: dict, # as expected immediately prior to bill implementation
         index: int,
         value: str | None,
@@ -186,7 +186,7 @@ def verify_statutes(
     remaining_liquidation_penalty = min_debt_byc * liquidation_penalty - initiator_incentive_byc
     if not remaining_liquidation_penalty > 0:
         indent = "" if bill_statute_name in relevant_statutes else "  "
-        failed.append(f"{', '.join(relevant_statutes)}: Initiator Incentive can be larger than Liquidation Penalty")
+        failed.append(f"{indent}{', '.join(relevant_statutes)}: Initiator Incentive can be larger than Liquidation Penalty")
 
     # Minimum auction price
     max_allowed_deviation = 0.01
@@ -209,7 +209,7 @@ def verify_statutes(
     min_price_deviation = min_price - implicit_min_price # of statutes price
     if abs(min_price_deviation) > max_allowed_deviation: # devition of less than 1% is ok
         indent = "" if bill_statute_name in relevant_statutes else "  "
-        failed.append(f"{', '.join(relevant_statutes)}: Implicit minimum auction price deviates by more than {max_allowed_deviation:.1f}% from Minimum Auction Price")
+        failed.append(f"{indent}{', '.join(relevant_statutes)}: Implicit minimum auction price deviates by more than {100*max_allowed_deviation:.1f}% from Minimum Auction Price ({implicit_min_price} vs. {min_price})")
 
     if failed:
         if any(bill_statute_name in msg for msg in failed):
