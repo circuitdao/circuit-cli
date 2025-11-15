@@ -205,10 +205,9 @@ def make_text_progress_handler() -> Callable[[Dict[str, Any]], None]:
                 icon = f"{colors['dim']}⏳{colors['reset']}" if colors["dim"] else "⏳"
                 write_line(st, f"{icon} {message}", final=True)
             elif event == "rpc_request":
-                method = ev.get("method", "")
                 endpoint = ev.get("endpoint", "")
                 icon = f"{colors['dim']}→{colors['reset']}" if colors["dim"] else "→"
-                write_line(st, f"{icon} {method} {endpoint}", final=True)
+                write_line(st, f"{icon} {endpoint}", final=True)
             elif event == "transaction_push":
                 tx_type = ev.get("transaction_type", "")
                 tx_id = ev.get("tx_id", "")[:8] + "..." if ev.get("tx_id") else ""

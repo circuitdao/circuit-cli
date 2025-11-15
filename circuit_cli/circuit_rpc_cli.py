@@ -7,6 +7,7 @@ import sys
 
 import httpx
 from circuit_cli.client import CircuitRPCClient
+from circuit_cli.persistence import CIRCUIT_DIR
 
 log = logging.getLogger(__name__)
 
@@ -1017,13 +1018,12 @@ To get paid a different amount of interest (incl 0), specify the desired value v
             sys.stderr.write(f"⏳ Contacting server at {base}...\n")
             # Second line: show command and key options
             sys.stderr.write(
-                f"↳ command: {function_name} | fee_per_cost: {fee_mode_str} | no_wait: {no_wait} | progress: {progress_mode}\n"
+                f"↳ command: {function_name} | fee_per_cost: {fee_mode_str} | no_wait: {no_wait} | progress: {progress_mode} | store: {args.dd if args.dd else CIRCUIT_DIR} \n"
             )
             sys.stderr.flush()
     except AssertionError as ae:
         # return error message with status
         result = {"error": str(ae)}
-    log.warning("dict store before: %s", args.dd)
     rpc_client = CircuitRPCClient(
         base_url=args.base_url,
         private_key=args.private_key,

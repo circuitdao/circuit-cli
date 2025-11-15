@@ -112,7 +112,6 @@ class CircuitRPCClient:
             - If no private_key is provided, operations requiring signatures will fail.
             - Call set_fee_per_cost() before submitting transactions when using presets.
         """
-        log.warning("Dict store path: %s", dict_store_path)
         # Setup console-friendly logging
         setup_console_logging()
 
@@ -135,18 +134,12 @@ class CircuitRPCClient:
             "MCAT": 1000,  # Default CAT decimals
         }
         self.base_url = base_url
-        # Use injected client if provided, otherwise create httpx.Client
         self.client = client if client is not None else httpx.AsyncClient(base_url=base_url, timeout=120)
-        log.info(f"Using add_sig_data={add_sig_data}")
         self.add_sig_data = add_sig_data
         self._fee_per_cost = fee_per_cost
         self.fee_per_cost: float | None = None
         self.no_wait_for_confirmation = no_wait_for_tx
         self.approval_mode = approval_mode
-        log.info(f"Using no_wait_for_confirmation={no_wait_for_tx}")
-        log.info(f"Using approval_mode={approval_mode}")
-        log.info(f"Using key_count={key_count}")
-        log.info(f"Using dict_store_path={dict_store_path}")
         self.store = DictStore(dict_store_path)
         # Optional progress handler for streaming progress events
         # It can be a sync or async callable accepting a single dict argument
