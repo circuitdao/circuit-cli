@@ -731,6 +731,37 @@ By default, only CRT coins not in governance mode are returned.
     )
     wallet_take_offer_parser.add_argument("offer_bech32", type=str, help="The offer in bech32 format to take")
 
+    ## split ##
+    wallet_split_parser = wallet_subparsers.add_parser(
+        "split",
+        help="Split a coin into multiple coins",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="""
+Split a coin into multiple coins of specified amounts.
+
+The amounts should be specified in XCH (e.g., 1.5 for 1.5 XCH).
+Multiple amounts can be provided as space-separated values.
+
+Example:
+  circuit-cli wallet split <coin_name> 1.0 0.5 0.25
+  This splits the coin into three new coins of 1.0, 0.5, and 0.25 XCH.
+"""
+    )
+    wallet_split_parser.add_argument("coin_name", type=str, help="Name of the coin to split")
+    wallet_split_parser.add_argument(
+        "amounts",
+        type=float,
+        nargs="+",
+        help="Amounts in XCH for the resulting coins (space-separated)"
+    )
+    wallet_split_parser.add_argument(
+        "--target-puzzle-hashes",
+        type=str,
+        nargs="+",
+        default=None,
+        help="[optional] Target puzzle hashes for the resulting coins (space-separated, must match number of amounts)"
+    )
+
     ### ANNOUNCER ###
     announcer_parser = subparsers.add_parser("announcer", help="Announcer commands")
     announcer_subparsers = announcer_parser.add_subparsers(dest="action")

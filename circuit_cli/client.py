@@ -176,9 +176,13 @@ class CircuitRPCClient:
         if self._fee_per_cost is None:
             self.fee_per_cost = 0.0
         elif self._fee_per_cost in ("fast", "medium"):
-            response_data = await self._make_api_request("POST", "/statutes", {"full": False})
-            fee_per_costs = response_data.get("fee_per_costs")
-            self.fee_per_cost = fee_per_costs.get(self._fee_per_cost)
+            try:
+                response_data = await self._make_api_request("POST", "/statutes", {"full": False})
+                fee_per_costs = response_data.get("fee_per_costs")
+                self.fee_per_cost = fee_per_costs.get(self._fee_per_cost)
+            except APIError:
+                log.warning(f"Failed to resolve fee_per_cost={self._fee_per_cost} from statutes endpoint.")
+                self.fee_per_cost = float(self._fee_per_cost)
         else:
             self.fee_per_cost = float(self._fee_per_cost)
         log.info("Set fee_per_cost to: %s", self.fee_per_cost)
@@ -1739,6 +1743,27 @@ class CircuitRPCClient:
             }
         )
         return await self._process_transaction("/split_coin", payload)
+
+    async def wallet_split(
+        self, coin_name, amounts, target_puzzle_hashes=None, ignore_coin_names: list[str] = None
+    ):
+        """
+        Split a coin into multiple coins.
+        
+        This is a CLI wrapper for wallet_split_coin that converts XCH amounts to mojos.
+        
+        Args:
+            coin_name: Name of the coin to split
+            amounts: List of amounts in XCH (floats)
+            target_puzzle_hashes: Optional list of target puzzle hashes for the resulting coins
+            ignore_coin_names: Optional list of coin names to ignore
+            
+        Returns:
+            dict: Transaction response after signing, pushing, and confirming
+        """
+        # Convert XCH amounts to mojos
+        amounts_in_mojos = [self._convert_number(amount, "MOJOS") for amount in amounts]
+        return await self.wallet_split_coin(coin_name, amounts_in_mojos, target_puzzle_hashes, ignore_coin_names)
 
     async def offer_make(self, xch_amount: float, byc_amount: float, ignore_coin_names: list[str] = None, expires_in_seconds=600):
         """
