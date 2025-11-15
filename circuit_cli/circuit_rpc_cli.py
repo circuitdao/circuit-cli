@@ -630,7 +630,7 @@ async def cli():
 
     ## propose ##
     bills_propose_parser = bills_subparsers.add_parser("propose", help="Propose a new bill")
-    bills_propose_parser.add_argument("index", type=int, help="Statute index. Specify -1 for custom conditions")
+    bills_propose_parser.add_argument("index", type=str, help="Statute index or name. Specify -1 for custom conditions")
     bills_propose_parser.add_argument(
         "value", nargs="?", default=None, type=str,
         help=(

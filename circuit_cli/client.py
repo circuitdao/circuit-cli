@@ -1838,7 +1838,9 @@ class CircuitRPCClient:
             bill=bill,
             include_spent_coins=incl_spent,
         )
-        return await self._make_api_request("POST", "/bills", payload)
+        response = await self._make_api_request("POST", "/bills", payload)
+        return response
+
 
     async def bills_toggle(self, coin_name, info=False):
         """Toggle a CRT coin between plain and governance modes.
@@ -1885,7 +1887,7 @@ class CircuitRPCClient:
 
     async def bills_propose(
         self,
-        index: int = None,
+        index: int | str,
         value: str = None,
         coin_name: str = None,
         force: bool = False,
@@ -1895,14 +1897,26 @@ class CircuitRPCClient:
         max_delta=None,
         label=None,
     ):
-        assert index is not None, "Must specify Statute index (between -1 and 42 included)"
-
         statutes_full_output = await self.statutes_list(full=True)
         statute_indices = statutes_full_output["statute_labels"]
 
+        if index.isdigit() or index == "-1":
+            index = int(index)
+            if not index >= -1 and index <= 43:
+                return "Failed to propose bill. Must specify a Statute index between -1 and 43 included"
+        elif isinstance(index, str):
+            statute_names = [name for name, _ in statute_indices]
+            matches = [sn for sn in statute_names if index.replace("_", " ").lower() in sn.replace("_", " ").lower()]
+            if not matches:
+                return f"Failed to propose bill. Unknown Statute name {index}"
+            if len(matches) > 1:
+                return f"Failed to propose bill. {index} matches multiple Statute names: {', '.join(matches)}"
+            index = [idx for name, idx in statute_indices if name == matches[0]][0]
+        else:
+            raise ValueError(f"Failed to propose bill. Statute index specified has invalid format")
+
         # Verify Statutes
         if not force:
-            #print(f"{statutes_full_output=}")
             expected_statutes = statutes_full_output["full_implemented_statutes"] # TODO: account for pending proposals
             if not verify_statutes(
                     statute_indices, expected_statutes, index, value,

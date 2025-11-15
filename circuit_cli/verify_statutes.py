@@ -11,7 +11,10 @@ TOML_FILE = "statutes_ranges.toml"
 
 def load_ranges():
     parent_dir = Path(__file__).resolve().parent.parent
-    with open(parent_dir / TOML_FILE, "rb") as f:
+    filepath = parent_dir / TOML_FILE
+    if not filepath.exists():
+        raise FileNotFoundError(f"Statutes verification failed. File {filepath} not found")
+    with open(filepath, "rb") as f:
         return tomllib.load(f)
 
 
@@ -76,11 +79,11 @@ def verify_statutes(
         statute_indices: list[tuple[int, str]],
         full_statutes: dict, # as expected immediately prior to bill implementation
         index: int,
-        value: str,
-        proposal_threshold: int,
-        veto_interval: int,
-        implementation_delay: int,
-        max_delta: int,
+        value: str | None,
+        proposal_threshold: int  | None,
+        veto_interval: int | None,
+        implementation_delay: int | None,
+        max_delta: int | None,
 ) -> bool:
 
     # find statute name
@@ -94,15 +97,18 @@ def verify_statutes(
         except Exception as err:
             print(f"Invalid {bill_statute_name} proposed. Must be convertible to bytes32")
             return False
-    else:
-        value = int(value)
 
     # update statutes according to proposed bill
-    full_statutes[bill_statute_name]["value"] = value
-    full_statutes[bill_statute_name]["threshold_amount_to_propose"] = proposal_threshold
-    full_statutes[bill_statute_name]["veto_interval"] = veto_interval
-    full_statutes[bill_statute_name]["implementation_delay"] = implementation_delay
-    full_statutes[bill_statute_name]["max_delta"] = max_delta
+    if value is not None:
+        full_statutes[bill_statute_name]["value"] = int(value) if index > 0 else value
+    if proposal_threshold is not None:
+        full_statutes[bill_statute_name]["threshold_amount_to_propose"] = proposal_threshold
+    if veto_interval is not None:
+        full_statutes[bill_statute_name]["veto_interval"] = veto_interval
+    if implementation_delay is not None:
+        full_statutes[bill_statute_name]["implementation_delay"] = implementation_delay
+    if max_delta is not None:
+        full_statutes[bill_statute_name]["max_delta"] = max_delta
 
     # load acceptable ranges from file
     r = load_ranges()
@@ -111,8 +117,10 @@ def verify_statutes(
     # verify all statutes
     failed = [] # keep track of failed verifications
     for idx in range(len(full_statutes)):
+        indent = "" if idx == index else "  "
+
         statute_name = statute_indices[idx][0]
-        indent = "" if idx == index else " "
+        value = full_statutes[statute_name]["value"]
 
         # check statute value
         if "min" in r["statutes"][statute_name]:
@@ -134,22 +142,22 @@ def verify_statutes(
                 section = r["default_constraints"][c]
 
             if c == "proposal_threshold":
-                if proposal_threshold is None:
+                if proposal_threshold is None or statute_name != bill_statute_name:
                     value = full_statutes[statute_name]["threshold_amount_to_propose"]
                 else:
                     value = proposal_threshold
             elif c == "veto_interval":
-                if veto_interval is None:
+                if veto_interval is None or statute_name != bill_statute_name:
                     value = full_statutes[statute_name][c]
                 else:
                     value = veto_interval
             elif c == "implementation_delay":
-                if implementation_delay is None:
+                if implementation_delay is None or statute_name != bill_statute_name:
                     value = full_statutes[statute_name][c]
                 else:
                     value = implementation_delay
             elif c == "max_delta":
-                if max_delta is None:
+                if max_delta is None or statute_name != bill_statute_name:
                     value = full_statutes[statute_name][c]
                 else:
                     value = max_delta
