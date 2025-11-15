@@ -631,7 +631,7 @@ async def cli():
 
     ## propose ##
     bills_propose_parser = bills_subparsers.add_parser("propose", help="Propose a new bill")
-    bills_propose_parser.add_argument("index", type=int, help="Statute index. Specify -1 for custom conditions")
+    bills_propose_parser.add_argument("index", type=str, help="Statute index or name. Specify -1 for custom conditions")
     bills_propose_parser.add_argument(
         "value", nargs="?", default=None, type=str,
         help=(
@@ -656,7 +656,7 @@ async def cli():
     bills_propose_parser.add_argument(
         "--max-delta", type=int, default=None, help="Max absolute amount by which Statues value may change"
     )
-    bills_propose_parser.add_argument("-s", "--skip-verify", action="store_true", help="Skip statutes integrity checks")
+    #bills_propose_parser.add_argument("-s", "--skip-verify", action="store_true", help="Skip statutes integrity checks")
     bills_propose_parser.add_argument(
         "-l", "--label", type=str, help="Tag this coin with a label that can be used to identify it in other operations"
     )
