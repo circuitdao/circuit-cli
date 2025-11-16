@@ -895,16 +895,25 @@ Example:
     statutes_subparsers = statutes_parser.add_subparsers(dest="action")
 
     ## list ##
-    statutes_list_subparser = statutes_subparsers.add_parser("list", help="List Statutes")
+    statutes_list_subparser = statutes_subparsers.add_parser(
+        "list", help="List Statutes",
+        description="Lists all Statutes."
+    )
     statutes_list_subparser.add_argument(
         "-f", "--full", action="store_true", help="Show Statutes incl constraints and additional info"
     )
 
     ## update price ##
-    statutes_update_subparser = statutes_subparsers.add_parser("update", help="Update Statutes Price")
+    statutes_update_subparser = statutes_subparsers.add_parser(
+        "update", help="Update Statutes Price",
+        description="Updates Statutes Price Info to most recently matured Oracle Price Info."
+    )
     statutes_update_subparser.add_argument(
         "-i", "--info", action="store_true", help="Show info on when Statues can be updated next"
     )
+
+    ## announce ##
+    statutes_announce_subparser = statutes_subparsers.add_parser("announce", help="Announce Statutes", description="Announces Statutes.")
 
     ### COLLATERAL VAULT ###
     vault_parser = subparsers.add_parser("vault", help="Manage a collateral vault", description="Manages a collateral vault.")
