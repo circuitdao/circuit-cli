@@ -206,7 +206,7 @@ def make_text_progress_handler() -> Callable[[Dict[str, Any]], None]:
                 write_line(st, f"{icon} {message}", final=True)
             elif event == "rpc_request":
                 endpoint = ev.get("endpoint", "")
-                icon = f"{colors['dim']}→{colors['reset']}" if colors["dim"] else "→"
+                icon = f"{colors['dim']}🌐{colors['reset']}" if colors["dim"] else "🌐"
                 write_line(st, f"{icon} {endpoint}", final=True)
             elif event == "transaction_push":
                 tx_type = ev.get("transaction_type", "")

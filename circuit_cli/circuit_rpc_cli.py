@@ -26,7 +26,29 @@ def fee_per_cost_type(value: str):
 
 
 async def cli():
-    parser = argparse.ArgumentParser(description="Circuit CLI tool", formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description="""
+Circuit CLI - Command-line interface for the Circuit Protocol
+
+A comprehensive tool for interacting with the Circuit Protocol on Chia blockchain.
+Circuit is a decentralized stablecoin protocol that enables collateralized loans,
+savings vaults, liquidations, and governance operations.
+
+Main command groups:
+  vault       - Manage collateral vaults (deposit, withdraw, borrow, repay)
+  savings     - Manage savings vaults with interest accrual
+  wallet      - View balances, addresses, coins, and manage offers
+  announcer   - Launch and manage price oracle announcers
+  oracle      - View and update oracle price data
+  bills       - Create and manage governance proposals
+  statutes    - View and update protocol statutes
+  upkeep      - Protocol maintenance (liquidations, auctions, RPC server, state monitoring)
+  self        - CLI configuration and management
+
+Use 'circuit-cli <command> -h' for detailed help on any command.
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     subparsers = parser.add_subparsers(dest="command")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument("-dd", type=str, help="Set persistence directory")
@@ -969,7 +991,6 @@ To get paid a different amount of interest (incl 0), specify the desired value v
     )
 
     args = parser.parse_args()
-    log.warning("ARGSPARSE: %s", args.dd)
     # set log level based on verbosity
     if args.verbose:
         log_level = logging.DEBUG
@@ -998,6 +1019,11 @@ To get paid a different amount of interest (incl 0), specify the desired value v
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     kwargs = dict([(k.lower(), v) for k, v in vars(args).items()])
+
+    # Handle case where no command or action is provided
+    if args.command is None:
+        parser.print_help()
+        return
 
     # Handle case where action is None (e.g., "circuit-cli wallet" without subcommand)
     if args.action is None:
