@@ -6,6 +6,7 @@ from math import floor
 from typing import Any, Dict, Optional
 
 import httpx
+from httpx import AsyncClient
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
     puzzle_hash_for_synthetic_public_key,
 )
@@ -13,7 +14,8 @@ from chia.wallet.trading.offer import Offer
 from chia_rs import Coin, PrivateKey, SpendBundle
 from circuit_cli.persistence import DictStore
 from circuit_cli.utils import generate_ssks, sign_spends
-from httpx import AsyncClient
+from circuit_cli.verify_statutes import verify_statutes
+
 
 log = logging.getLogger(__name__)
 
@@ -324,6 +326,29 @@ class CircuitRPCClient:
             return number
         raise TypeError(f"Can only convert from str, float and int to int, got {type(number).__name__}")
 
+    def _convert_statute_index(self, index: int | str | None, statute_indices: list[tuple[str, int]]) -> int | None:
+        """Convert a Statute index given as an integer or substring of Statute name to an integer."""
+        if index is None:
+            return None
+        elif index.isdigit() or index == "-1":
+            index = int(index)
+            if not index >= -1 and index <= 43:
+                raise ValueError("Invalid Statute index. Must be an integer between -1 and 43 included")
+            print(f"Selected Statute: [{index}] {[name for name, idx in statute_indices if idx == index][0]}")
+            return index
+        elif isinstance(index, str):
+            statute_names = [name for name, _ in statute_indices]
+            matches = [sn for sn in statute_names if index.replace("_", " ").lower() in sn.replace("_", " ").lower()]
+            if not matches:
+                raise ValueError(f"Failed to match {index} to a Statute name")
+            if len(matches) > 1:
+                raise ValueError(f"Failed to unambiguously match {index} to a Statute name. Matches: {', '.join(matches)}")
+            print(f"Selected Statute: [{[idx for name, idx in statute_indices if name == matches[0]][0]}] {matches[0]}")
+            index = [idx for name, idx in statute_indices if name == matches[0]][0]
+            return index
+        else:
+            raise ValueError(f"Statute index has invalid format")
+
     async def _process_transaction(
         self, endpoint: str, payload: Dict[str, Any], error_handling_info: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
@@ -533,17 +558,17 @@ class CircuitRPCClient:
         else:
             signed_bundle = bundle
         assert isinstance(signed_bundle, SpendBundle)
-        
+
         # User approval check if approval mode is enabled
         if self.approval_mode:
             tx_id = signed_bundle.name().hex()
             tx_description = f"{'signed ' if sign else ''}transaction{f' ({tx_type})' if tx_type else ''}"
-            
+
             print(f"\n⚠️  Transaction Approval Required")
             print(f"Transaction ID: {tx_id}")
             print(f"Type: {tx_description}")
             print(f"Base URL: {self.base_url}")
-            
+
             try:
                 # Use input() for synchronous user input
                 response = input("Do you want to proceed with this transaction? (y/N): ").strip().lower()
@@ -554,18 +579,18 @@ class CircuitRPCClient:
             except (KeyboardInterrupt, EOFError):
                 print("\n❌ Transaction cancelled by user.")
                 raise APIError("Transaction cancelled by user approval")
-        
+
         # Emit progress event for transaction push
         tx_id = signed_bundle.name().hex()
         push_event = {
-            "event": "transaction_push", 
+            "event": "transaction_push",
             "tx_id": tx_id,
             "message": f"Pushing {'signed ' if sign else ''}transaction{f' ({tx_type})' if tx_type else ''}"
         }
         if tx_type:
             push_event["transaction_type"] = tx_type
         await self._emit_progress(push_event)
-        
+
         log.info("Signed bundle: %s, pushing", tx_id)
         response = await self.client.post(
             "/sign_and_push",
@@ -711,7 +736,7 @@ class CircuitRPCClient:
             result = client.vault_deposit(5.0)
             # Deposits 5 XCH as collateral into the vault
         """
-        payload = self._build_transaction_payload({"amount": self._convert_number(amount, "MOJOS")})
+        payload = self._build_transaction_payload({"amount": self._convertumber(amount, "MOJOS")})
         return await self._process_transaction("/vault/deposit", payload)
 
     async def vault_withdraw(self, amount):
@@ -992,7 +1017,7 @@ class CircuitRPCClient:
             )
         except AssertionError as err:
             if "no unapproved announcer" in err.args[0].lower():
-                return "No unapproved Announcer found"
+                raise ValueError("No unapproved Announcer found")
             raise
         payload = self._build_transaction_payload({"operation": "exit", "args": {}})
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
@@ -1296,12 +1321,17 @@ class CircuitRPCClient:
         lapsed=None,
         statute_index=None,
         bill=None,
+        min_amount=None,
         incl_spent=False,
     ):
         """List governance bills with optional state filters.
 
         The filters correspond to server-side bill state predicates.
         """
+        statutes_full_output = await self.statutes_list(full=True)
+        statute_indices = statutes_full_output["statute_labels"]
+        index = self._convert_statute_index(statute_index, statute_indices)
+
         payload = {
             "synthetic_pks": [],
             "exitable": exitable,
@@ -1312,8 +1342,9 @@ class CircuitRPCClient:
             "in_implementation_delay": in_implementation_delay,
             "implementable": implementable,
             "lapsed": lapsed,
-            "statute_index": statute_index,
+            "statute_index": index,
             "bill": bill,
+            "min_amount": self._convert_number(min_amount, "MCAT"),
             "include_spent_coins": incl_spent,
         }
         return await self._make_api_request("POST", "/bills", payload)
@@ -1835,12 +1866,17 @@ class CircuitRPCClient:
         lapsed=None,
         statute_index=None,
         bill=None,
+        min_amount=None,
         incl_spent=False,
     ):
         """List governance bills with optional state filters.
 
         Mirrors upkeep_bills_list but uses base payload helper.
         """
+        statutes_full_output = await self.statutes_list(full=True)
+        statute_indices = statutes_full_output["statute_labels"]
+        index = self._convert_statute_index(statute_index, statute_indices)
+
         payload = self._build_base_payload(
             exitable=exitable,
             empty=empty,
@@ -1850,11 +1886,14 @@ class CircuitRPCClient:
             in_implementation_delay=in_implementation_delay,
             implementable=implementable,
             lapsed=lapsed,
-            statute_index=statute_index,
+            statute_index=index,
             bill=bill,
+            min_amount=self._convert_number(min_amount, "MCAT"),
             include_spent_coins=incl_spent,
         )
-        return await self._make_api_request("POST", "/bills", payload)
+        response = await self._make_api_request("POST", "/bills", payload)
+        return response
+
 
     async def bills_toggle(self, coin_name, info=False):
         """Toggle a CRT coin between plain and governance modes.
@@ -1887,13 +1926,12 @@ class CircuitRPCClient:
 
     async def bills_reset(self, coin_name):
         """Reset a bill on a governance coin back to empty state."""
-        # Get coin name if not provided, using custom logic for empty bills
+        # Select lapsed coin if no coin name provided
         if not coin_name:
-            payload = self._build_base_payload(include_spent_coins=False, empty_only=True)
+            payload = self._build_base_payload(include_spent_coins=False, lapsed=True)
             data = await self._make_api_request("POST", "/bills", payload)
-            assert len(data) > 0, "No bills found"
-            assert len(data) == 1, "More than one bill found. Must specify governance coin name"
-            coin_name = data["name"]
+            assert len(data) > 0, "No lapsed bills to reset found. To reset a non-lapsed bill, please specify the coin name"
+            coin_name = data[0]["name"]
 
         # Process as transaction
         payload = self._build_transaction_payload({"coin_name": coin_name})
@@ -1901,7 +1939,7 @@ class CircuitRPCClient:
 
     async def bills_propose(
         self,
-        index: int = None,
+        index: int | str,
         value: str = None,
         coin_name: str = None,
         force: bool = False,
@@ -1909,16 +1947,30 @@ class CircuitRPCClient:
         veto_interval=None,
         implementation_delay=None,
         max_delta=None,
-        skip_verify=False,
         label=None,
     ):
-        assert index is not None, "Must specify Statute index (between -1 and 42 included)"
 
-        # Get coin name if not provided, using custom logic for empty bills
+        statutes_full_output = await self.statutes_list(full=True)
+        statute_indices = statutes_full_output["statute_labels"]
+        index = self._convert_statute_index(index, statute_indices)
+
+        # Verify Statutes
+        if not force:
+            expected_statutes = statutes_full_output["full_implemented_statutes"] # TODO: account for pending proposals
+            if not verify_statutes(
+                    statute_indices, expected_statutes, index, value,
+                    proposal_threshold, veto_interval, implementation_delay, max_delta
+            ):
+                raise ValueError("Statutes verification failed. To force proposal specify -f option")
+
+        # Get coin name if not provided, pick a suitable governance coin
         if coin_name is None:
-            payload = self._build_base_payload(include_spent_coins=False, empty_only=True)
+            statute_name = statute_indices[index][0]
+            threshold_amount_to_propose = statutes_full_output["full_implemented_statutes"][statute_name]["threshold_amount_to_propose"]
+            payload = self._build_base_payload(include_spent_coins=False, empty=True, min_amount=threshold_amount_to_propose+1)
             data = await self._make_api_request("POST", "/bills", payload)
-            assert len(data) > 0, "No governance coin with empty bill found"
+            if not data:
+                raise ValueError("No governance coin with empty bill and amount in excess of proposal threshold found")
             coin_name = data[0]["name"]
 
         if value is not None:
@@ -1936,11 +1988,9 @@ class CircuitRPCClient:
                 "value": value,
                 "value_is_program": False,
                 "threshold_amount_to_propose": self._convert_number(proposal_threshold, "MCAT"),
-                "veto_seconds": self._convert_number(veto_interval),
-                "delay_seconds": self._convert_number(implementation_delay),
+                "veto_interval": self._convert_number(veto_interval),
+                "implementation_delay": self._convert_number(implementation_delay),
                 "max_delta": self._convert_number(max_delta),
-                "force": force,
-                "verify": not skip_verify,
             }
         )
         tx_result = await self._process_transaction("/bills/propose", payload)
@@ -1960,14 +2010,15 @@ class CircuitRPCClient:
 
     async def bills_implement(self, coin_name=None):
         if coin_name is None:
-            payload = self._build_base_payload(include_spent_coins=False, empty_only=False, non_empty_only=True)
+            payload = self._build_base_payload(include_spent_coins=False, implementable=True)
             data: list = await self._make_api_request("POST", "/bills", payload)
 
             if coin_name:
                 coins = [coin for coin in data if coin["name"] == coin_name]
             else:
+                if not data:
+                    raise ValueError("No implementable bills found")
                 coins = sorted(data, key=lambda x: x["status"]["implementable_in"])
-                assert len(coins) > 0, "There are no proposed bills"
                 assert coins[0]["status"]["implementable_in"] <= 0, "No implementable bill found"
                 coin_name = coins[0]["name"]
         else:

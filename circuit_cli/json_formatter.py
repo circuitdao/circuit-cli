@@ -23,7 +23,7 @@ class CircuitJSONFormatter:
             #r".*value.*",
             #r".*min_.*",
             #r".*max_.*",
-            r".*threshold.*",
+            r"^(?!.*\b(threshold_amount_to_propose)\b).*threshold.*",
         ]
 
         self.byc_patterns = [
@@ -43,6 +43,7 @@ class CircuitJSONFormatter:
         ]
 
         self.crt_patterns = [
+            r"^threshold_amount_to_propose$",
             r"^announcer_rewards_per_interval$",
             r"^(?!(.*crt_price.*)).*crt.*",
         ]
@@ -543,6 +544,8 @@ class CircuitJSONFormatter:
                 sorted_keys.append("proposal_times")
             if "statute_index" in keys:
                 sorted_keys.append("statute_index")
+            if "statute_name" in keys:
+                sorted_keys.append("statute_name")
             if "value" in keys:
                 sorted_keys.append("value")
             sorted_keys.extend(constraint_keys)

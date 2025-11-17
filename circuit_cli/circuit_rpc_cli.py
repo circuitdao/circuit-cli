@@ -316,7 +316,7 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
     upkeep_bills_list_parser.add_argument(
         "-s",
         "--statute-index",
-        action="store_true",
+        type=str,
         default=None,
         help="Only list governance coins with bill for specified statute index",
     )
@@ -326,6 +326,9 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         action="store_true",
         default=None,
         help="Only list governance coins with given bill (excl propsal times). Specify as program in hex format",
+    )
+    upkeep_bills_list_parser.add_argument(
+        "-a", "--min-amount", type=float, help="Only list governance coins of at least given CRT amount"
     )
     upkeep_bills_list_parser.add_argument("--incl-spent", action="store_true", help="Include spent governance coins")
 
@@ -634,11 +637,14 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         "-l", "--lapsed", action="store_true", default=None, help="Governance coins with lapsed bill"
     )
     bills_list_parser.add_argument(
-        "-s", "--statute-index", type=int, help="Governance coins with bill to change specified statute"
+        "-s", "--statute-index", type=str, default=None, help="Governance coins with bill to change specified statute"
     )
     bills_list_parser.add_argument(
         "-b", "--bill", type=str,
-        help="Governance coins with specified bill (excl propsal times). Must be program in hex format",
+        help="Governance coins with specified bill (excl proposal times). Must be program in hex format",
+    )
+    bills_list_parser.add_argument(
+        "-a", "--min-amount", type=float, default=None, help="Governance coins of at least given CRT amount"
     )
     bills_list_parser.add_argument("--incl-spent", action="store_true", help="Include spent governance coins")
 
@@ -653,7 +659,7 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
 
     ## propose ##
     bills_propose_parser = bills_subparsers.add_parser("propose", help="Propose a new bill")
-    bills_propose_parser.add_argument("index", type=int, help="Statute index. Specify -1 for custom conditions")
+    bills_propose_parser.add_argument("index", type=str, help="Statute index or name. Specify -1 for custom conditions")
     bills_propose_parser.add_argument(
         "value", nargs="?", default=None, type=str,
         help=(
@@ -669,16 +675,17 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         "-f", "--force", action="store_true", help="Propose bill even if resulting Statutes are not consistent"
     )
     bills_propose_parser.add_argument(
-        "--proposal-threshold", default=None, type=float, help="Min amount of CRT required to propose new Statute value"
+        "-p", "--proposal-threshold", default=None, type=int, help="Min amount of CRT required to propose new Statute value"
     )
-    bills_propose_parser.add_argument("-v", "--veto-interval", type=int, default=None, help="Veto period in seconds")
+    bills_propose_parser.add_argument(
+        "-v", "--veto-interval", type=int, default=None, help="Veto period in seconds"
+    )
     bills_propose_parser.add_argument(
         "-d", "--implementation-delay", type=int, default=None, help="Implementation delay in seconds"
     )
     bills_propose_parser.add_argument(
         "--max-delta", type=int, default=None, help="Max absolute amount by which Statues value may change"
     )
-    bills_propose_parser.add_argument("-s", "--skip-verify", action="store_true", help="Skip statutes integrity checks")
     bills_propose_parser.add_argument(
         "-l", "--label", type=str, help="Tag this coin with a label that can be used to identify it in other operations"
     )
@@ -696,7 +703,7 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
     bills_reset_subparser = bills_subparsers.add_parser(
         "reset", help="Reset a bill", description="Sets bill of a governance coin to nil."
     )
-    bills_reset_subparser.add_argument("coin_name", type=str, help="Coin name")
+    bills_reset_subparser.add_argument("coin_name", nargs="?", type=str, default=None, help="[optional] Coin name. By default a coin with a lapsed bill is chosen")
 
     ### WALLET ###
     wallet_parser = subparsers.add_parser("wallet", help="Wallet commands")
@@ -910,16 +917,25 @@ Example:
     statutes_subparsers = statutes_parser.add_subparsers(dest="action")
 
     ## list ##
-    statutes_list_subparser = statutes_subparsers.add_parser("list", help="List Statutes")
+    statutes_list_subparser = statutes_subparsers.add_parser(
+        "list", help="List Statutes",
+        description="Lists all Statutes."
+    )
     statutes_list_subparser.add_argument(
         "-f", "--full", action="store_true", help="Show Statutes incl constraints and additional info"
     )
 
     ## update price ##
-    statutes_update_subparser = statutes_subparsers.add_parser("update", help="Update Statutes Price")
+    statutes_update_subparser = statutes_subparsers.add_parser(
+        "update", help="Update Statutes Price",
+        description="Updates Statutes Price Info to most recently matured Oracle Price Info."
+    )
     statutes_update_subparser.add_argument(
         "-i", "--info", action="store_true", help="Show info on when Statues can be updated next"
     )
+
+    ## announce ##
+    statutes_announce_subparser = statutes_subparsers.add_parser("announce", help="Announce Statutes", description="Announces Statutes.")
 
     ### COLLATERAL VAULT ###
     vault_parser = subparsers.add_parser("vault", help="Manage a collateral vault", description="Manages a collateral vault.")

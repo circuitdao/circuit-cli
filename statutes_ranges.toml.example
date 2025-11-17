@@ -1,0 +1,222 @@
+#value = int(config["values"]["big_number"].replace("_", ""))
+
+### DEFAULT CONSTRAINTS ###
+[default_constraints]
+
+[default_constraints.proposal_threshold]
+min = "250_000_000_000" # mCRT
+max = "300_000_000_000" # mCRT
+
+[default_constraints.veto_interval]
+min = "14d"
+max = "30d"
+
+[default_constraints.implementation_delay]
+min = "14d"
+max = "30d"
+
+[default_constraints.max_delta]
+min = "0"
+max = "0"
+
+### STATUTES ###
+[statutes]
+
+[statutes.ORACLE_LAUNCHER_ID]
+# n/a
+
+[statutes.ORACLE_LAUNCHER_ID.veto_interval]
+min = "1hr"
+max = "1hr"
+
+[statutes.ORACLE_LAUNCHER_ID.implementation_delay]
+min = "0"
+max = "0"
+
+[statutes.STABILITY_FEE_DF]
+min = "10_000_000_000"
+max = ""
+
+[statutes.STABILITY_FEE_DF.veto_interval]
+min = "1d"
+max = "7d"
+
+[statutes.STABILITY_FEE_DF.implementation_delay]
+min = "1d"
+max = "7d"
+
+[statutes.INTEREST_DF]
+min = "10_000_000_000"
+max = ""
+
+[statutes.INTEREST_DF.veto_interval]
+min = "1d"
+max = "7d"
+
+[statutes.INTEREST_DF.implementation_delay]
+min = "1d"
+max = "7d"
+
+[statutes.CUSTOM_CONDITIONS]
+# n/a
+
+[statutes.ORACLE_M_OF_N]
+min = "5"
+max = "11"
+
+[statutes.ORACLE_PRICE_UPDATE_DELAY]
+min = "30min"
+max = "2hr"
+
+[statutes.ORACLE_PRICE_UPDATE_RATIO_BPS]
+min = "50"
+max = "200"
+
+[statutes.PRICE_DELAY]
+min = "1hr"
+max = "2hr"
+
+[statutes.VAULT_MINIMUM_DEBT]
+min = "25_000"
+max = "500_000"
+
+[statutes.VAULT_LIQUIDATION_RATIO_PCT]
+min = "160"
+max = "200"
+
+[statutes.VAULT_LIQUIDATION_PENALTY_BPS]
+min = "1_300"
+max = "1_500"
+
+[statutes.VAULT_INITIATOR_INCENTIVE_FLAT]
+min = "12_000"
+max = "12_000"
+
+[statutes.VAULT_INITIATOR_INCENTIVE_BPS]
+min = "800"
+max = "800"
+
+[statutes.VAULT_AUCTION_TTL]
+min = "2_400"
+max = "2_400"
+
+[statutes.VAULT_AUCTION_STARTING_PRICE_FACTOR_BPS]
+min = "12_000"
+max = "12_000"
+
+[statutes.VAULT_AUCTION_PRICE_TTL]
+min = "150"
+max = "150"
+
+[statutes.VAULT_AUCTION_PRICE_DECREASE_BPS]
+min = "500"
+max = "500"
+
+[statutes.VAULT_AUCTION_MINIMUM_PRICE_FACTOR_BPS]
+min = "2_500"
+max = "2_500"
+
+[statutes.VAULT_AUCTION_MINIMUM_BID_FLAT]
+min = "1_000_000"
+max = "5_000_000"
+
+[statutes.VAULT_AUCTION_MINIMUM_BID_BPS]
+min = "1_000"
+max = "1_000"
+
+[statutes.TREASURY_MINIMUM]
+min = "1_000_000"
+max = "10_000_000"
+
+[statutes.TREASURY_MAXIMUM]
+min = "10_000_000"
+max = "100_000_000"
+
+[statutes.TREASURY_MINIMUM_DELTA]
+min = "5_000"
+max = "50_000"
+
+[statutes.TREASURY_REBALANCE_RATIO_PCT]
+min = "200"
+max = "500"
+
+[statutes.AUCTIONS_MINIMUM_PRICE_INCREASE_BPS]
+min = "500"
+max = "1_000"
+
+[statutes.RECHARGE_AUCTION_TTL]
+min = "12hr"
+max = "48hr"
+
+[statutes.RECHARGE_AUCTION_MINIMUM_CRT_PRICE]
+min = "10_000_000"
+max = "10_000_000"
+
+[statutes.RECHARGE_AUCTION_BID_TTL]
+min = "20min"
+max = "30min"
+
+[statutes.RECHARGE_AUCTION_MINIMUM_BID]
+min = "1_000_000"
+max = "1_000_000"
+
+[statutes.RECHARGE_AUCTION_MAXIMUM_BID]
+min = "10_000_000"
+max = "10_000_000"
+
+[statutes.SURPLUS_AUCTION_LOT]
+min = "500_000"
+max = "5_000_000"
+
+[statutes.SURPLUS_AUCTION_BID_TTL]
+min = "20min"
+max = "30min"
+
+[statutes.ANNOUNCER_REWARDS_INTERVAL_PRICE_UPDATES]
+min = "50"
+max = "200"
+
+[statutes.ANNOUNCER_REWARDS_PER_INTERVAL]
+min = "500_000"
+max = "2_000_000"
+
+[statutes.ANNOUNCER_MINIMUM_DEPOSIT_MOJOS]
+min = "1_000_000_000_000" # 1 XCH
+max = "1_000_000_000_000_000" # 1000 XCH
+
+[statutes.ANNOUNCER_MAXIMUM_VALUE_TTL]
+min = "10min"
+max = "15min"
+
+[statutes.ANNOUNCER_PENALTY_INTERVAL_MINUTES]
+min = "10"
+max = "20"
+
+[statutes.ANNOUNCER_PENALTY_PER_INTERVAL_BPS]
+min = "500"
+max = "500"
+
+[statutes.ANNOUNCER_DISAPPROVAL_MAXIMUM_PENALTY_BPS]
+min = "1_500"
+max = "3_000"
+
+[statutes.ANNOUNCER_DISAPPROVAL_COOLDOWN_INTERVAL]
+min = "60d"
+max = "120d"
+
+[statutes.GOVERNANCE_BILL_PROPOSAL_FEE_MOJOS]
+min = "1_000_000_000_000"
+max = "10_000_000_000_000"
+
+[statutes.GOVERNANCE_IMPLEMENTATION_INTERVAL]
+min = "4hr"
+max = "8hr"
+
+[statutes.GOVERNANCE_COOLDOWN_INTERVAL]
+min = "0"
+max = "7d"
+
+[statutes.BLOCK_ISSUANCE]
+min = "0"
+max = "1"
+
