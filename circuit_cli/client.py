@@ -736,7 +736,7 @@ class CircuitRPCClient:
             result = client.vault_deposit(5.0)
             # Deposits 5 XCH as collateral into the vault
         """
-        payload = self._build_transaction_payload({"amount": self._convertumber(amount, "MOJOS")})
+        payload = self._build_transaction_payload({"amount": self._convert_number(amount, "MOJOS")})
         return await self._process_transaction("/vault/deposit", payload)
 
     async def vault_withdraw(self, amount):
@@ -2076,7 +2076,7 @@ class CircuitRPCClient:
         payload = self._build_transaction_payload({})
         return await self._process_transaction("/statutes/update", payload)
 
-    async def statutes_announce(self, *args):
+    async def statutes_announce(self):
         """Publish a statutes announcement transaction.
 
         Creates, signs, and submits the announce transaction which may be
