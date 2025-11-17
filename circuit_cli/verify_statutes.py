@@ -4,6 +4,7 @@ from typing import Tuple
 from pathlib import Path
 from math import ceil
 
+from chia.types.blockchain_format.program import Program
 from chia_rs.sized_bytes import bytes32
 
 TOML_FILE = "statutes_ranges.toml"
@@ -90,17 +91,28 @@ def verify_statutes(
     assert statute_indices[index][1] == index
     bill_statute_name = statute_indices[index][0]
 
-    # check that proposed statute value has expected format
-    if index == 0:
-        try:
-            bytes32.from_hexstr(value)
-        except Exception as err:
-            print(f"Invalid {bill_statute_name} proposed. Must be convertible to bytes32")
-            return False
-
     # update statutes according to proposed bill
     if value is not None:
-        full_statutes[bill_statute_name]["value"] = int(value) if index > 0 else value
+        # check that proposed statute value has expected format
+        if index == -1:
+            try:
+                Program.fromhex(value)
+            except Exception as err:
+                print(f"Invalid custom conditions announcement proposed. Custom conditions must be a hex string convertible to Program")
+                return False
+        if index == 0:
+            try:
+                bytes32.from_hexstr(value)
+            except Exception as err:
+                print(f"Invalid {bill_statute_name} proposed. Must be a hex string convertible to bytes32")
+                return False
+        if index == 3:
+            # no reason to ever set custom condition Statute value to anything but nil
+            raise ValueError(f"Do not propose a new Statue value for {bill_statute_name}. To announce custom conditions, specify Statute index -1, not 3")
+        # overwrite current with proposed statute value
+        full_statutes[bill_statute_name]["value"] = (
+            int(value) if index not in [0, 3] else (value if index != -1 else Program.to(value))
+        )
     if proposal_threshold is not None:
         full_statutes[bill_statute_name]["threshold_amount_to_propose"] = proposal_threshold
     if veto_interval is not None:

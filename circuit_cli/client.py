@@ -334,6 +334,8 @@ class CircuitRPCClient:
             index = int(index)
             if not index >= -1 and index <= 43:
                 raise ValueError("Invalid Statute index. Must be an integer between -1 and 43 included")
+            print(f"Selected Statute: [{index}] {[name for name, idx in statute_indices if idx == index][0]}")
+            return index
         elif isinstance(index, str):
             statute_names = [name for name, _ in statute_indices]
             matches = [sn for sn in statute_names if index.replace("_", " ").lower() in sn.replace("_", " ").lower()]
@@ -341,6 +343,7 @@ class CircuitRPCClient:
                 raise ValueError(f"Failed to match {index} to a Statute name")
             if len(matches) > 1:
                 raise ValueError(f"Failed to unambiguously match {index} to a Statute name. Matches: {', '.join(matches)}")
+            print(f"Selected Statute: [{[idx for name, idx in statute_indices if name == matches[0]][0]}] {matches[0]}")
             index = [idx for name, idx in statute_indices if name == matches[0]][0]
             return index
         else:
@@ -1014,7 +1017,7 @@ class CircuitRPCClient:
             )
         except AssertionError as err:
             if "no unapproved announcer" in err.args[0].lower():
-                return "No unapproved Announcer found"
+                raise ValueError("No unapproved Announcer found")
             raise
         payload = self._build_transaction_payload({"operation": "exit", "args": {}})
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
@@ -1958,7 +1961,7 @@ class CircuitRPCClient:
                     statute_indices, expected_statutes, index, value,
                     proposal_threshold, veto_interval, implementation_delay, max_delta
             ):
-                return "To force proposal specify -f option"
+                raise ValueError("Statutes verification failed. To force proposal specify -f option")
 
         # Get coin name if not provided, pick a suitable governance coin
         if coin_name is None:
@@ -1967,7 +1970,7 @@ class CircuitRPCClient:
             payload = self._build_base_payload(include_spent_coins=False, empty=True, min_amount=proposal_threshold)
             data = await self._make_api_request("POST", "/bills", payload)
             if not data:
-                return "No governance coin with empty bill and amount in excess of proposal threshold found"
+                raise ValueError("No governance coin with empty bill and amount in excess of proposal threshold found")
             coin_name = data[0]["name"]
 
         if value is not None:
@@ -2014,7 +2017,7 @@ class CircuitRPCClient:
                 coins = [coin for coin in data if coin["name"] == coin_name]
             else:
                 if not data:
-                    return "No implementable bills found"
+                    raise ValueError("No implementable bills found")
                 coins = sorted(data, key=lambda x: x["status"]["implementable_in"])
                 assert coins[0]["status"]["implementable_in"] <= 0, "No implementable bill found"
                 coin_name = coins[0]["name"]

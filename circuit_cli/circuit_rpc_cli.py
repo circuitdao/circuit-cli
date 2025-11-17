@@ -653,7 +653,7 @@ async def cli():
         "-f", "--force", action="store_true", help="Propose bill even if resulting Statutes are not consistent"
     )
     bills_propose_parser.add_argument(
-        "--proposal-threshold", default=None, type=float, help="Min amount of CRT required to propose new Statute value"
+        "-p", "--proposal-threshold", default=None, type=int, help="Min amount of CRT required to propose new Statute value"
     )
     bills_propose_parser.add_argument(
         "-v", "--veto-interval", type=int, default=None, help="Veto period in seconds"
