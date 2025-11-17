@@ -1966,8 +1966,8 @@ class CircuitRPCClient:
         # Get coin name if not provided, pick a suitable governance coin
         if coin_name is None:
             statute_name = statute_indices[index][0]
-            proposal_threshold = statutes_full_output["full_implemented_statutes"][statute_name]["threshold_amount_to_propose"] + 1
-            payload = self._build_base_payload(include_spent_coins=False, empty=True, min_amount=proposal_threshold)
+            threshold_amount_to_propose = statutes_full_output["full_implemented_statutes"][statute_name]["threshold_amount_to_propose"]
+            payload = self._build_base_payload(include_spent_coins=False, empty=True, min_amount=threshold_amount_to_propose+1)
             data = await self._make_api_request("POST", "/bills", payload)
             if not data:
                 raise ValueError("No governance coin with empty bill and amount in excess of proposal threshold found")
@@ -1988,8 +1988,8 @@ class CircuitRPCClient:
                 "value": value,
                 "value_is_program": False,
                 "threshold_amount_to_propose": self._convert_number(proposal_threshold, "MCAT"),
-                "veto_seconds": self._convert_number(veto_interval),
-                "delay_seconds": self._convert_number(implementation_delay),
+                "veto_interval": self._convert_number(veto_interval),
+                "implementation_delay": self._convert_number(implementation_delay),
                 "max_delta": self._convert_number(max_delta),
             }
         )
@@ -2010,7 +2010,7 @@ class CircuitRPCClient:
 
     async def bills_implement(self, coin_name=None):
         if coin_name is None:
-            payload = self._build_base_payload(include_spent_coins=False, implementable=True) #empty_only=False, non_empty_only=True)
+            payload = self._build_base_payload(include_spent_coins=False, implementable=True)
             data: list = await self._make_api_request("POST", "/bills", payload)
 
             if coin_name:
