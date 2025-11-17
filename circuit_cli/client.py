@@ -334,7 +334,10 @@ class CircuitRPCClient:
             index = int(index)
             if not index >= -1 and index <= 43:
                 raise ValueError("Invalid Statute index. Must be an integer between -1 and 43 included")
-            print(f"Selected Statute: [{index}] {[name for name, idx in statute_indices if idx == index][0]}")
+            if index >= 0:
+                print(f"Selected Statute: [{index}] {[name for name, idx in statute_indices if idx == index][0]}")
+            else:
+                print(f"Selected Statute: [{index}] Custom conditions announcement")
             return index
         elif isinstance(index, str):
             statute_names = [name for name, _ in statute_indices]
