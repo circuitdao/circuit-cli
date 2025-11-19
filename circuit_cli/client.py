@@ -177,7 +177,7 @@ class CircuitRPCClient:
                 self.fee_per_cost = fee_per_costs.get(self._fee_per_cost)
             except APIError:
                 log.warning(f"Failed to resolve fee_per_cost={self._fee_per_cost} from statutes endpoint.")
-                self.fee_per_cost = float(self._fee_per_cost)
+                self.fee_per_cost = float(self._fee_per_cost) # TODO: this will throw. simply stick with existing self.fee_per_cost?
         else:
             self.fee_per_cost = float(self._fee_per_cost)
         log.info("Set fee_per_cost to: %s", self.fee_per_cost)
@@ -1591,7 +1591,7 @@ class CircuitRPCClient:
 
     ## Vaults ##
     async def upkeep_vaults_list(
-            self, coin_name=None, transferrable_stability_fees=False, liquidatable=False, startable=False, restartable=False,
+            self, coin_name=None, transferable_stability_fees=False, liquidatable=False, startable=False, restartable=False,
             in_liquidation=False, biddable=False, in_bad_debt=False, seized=False, not_seized=False
     ):
         if not seized:
@@ -1599,8 +1599,8 @@ class CircuitRPCClient:
                 seized = None
             else: seized = False
         else: seized = True
-        if not transferrable_stability_fees:
-            transferrable_stability_fees = None
+        if not transferable_stability_fees:
+            transferable_stability_fees = None
         if not liquidatable:
             liquidatable = None
         if not startable:
@@ -1618,7 +1618,7 @@ class CircuitRPCClient:
             response = await self.client.post(
                 f"/vaults/{coin_name}/",
                 json={
-                    "transferrable_sf": transferrable_stability_fees,
+                    "transferable_sf": transferable_stability_fees,
                     "liquidatable": liquidatable,
                     "startable": startable,
                     "restartable": restartable,
@@ -1633,7 +1633,7 @@ class CircuitRPCClient:
         response = await self.client.post(
             "/vaults",
             json={
-                "transferrable_sf": transferrable_stability_fees,
+                "transferable_sf": transferable_stability_fees,
                 "liquidatable": liquidatable,
                 "startable": startable,
                 "restartable": restartable,
