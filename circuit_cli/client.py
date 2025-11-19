@@ -167,30 +167,30 @@ class CircuitRPCClient:
 
     async def _get_statutes_cached(self, full: bool = False) -> dict[str, Any]:
         """Get statutes with 1-minute caching to avoid bombarding the server.
-        
+
         Args:
             full: If True, return the full set of statute definitions and metadata.
-            
+
         Returns:
             Cached or fresh statutes response data.
         """
         current_time = time.time()
         cache_ttl = 60  # 1 minute cache
-        
+
         # Check if we have a valid cached response
         if full in self._statutes_cache:
             cached_response, cached_time = self._statutes_cache[full]
             if current_time - cached_time < cache_ttl:
                 log.debug(f"Using cached /statutes response (full={full}, age={current_time - cached_time:.1f}s)")
                 return cached_response
-        
+
         # No valid cache, make fresh request
         log.debug(f"Fetching fresh /statutes response (full={full})")
         response_data = await self._make_api_request("POST", "/statutes", {"full": full})
-        
+
         # Store in cache
         self._statutes_cache[full] = (response_data, current_time)
-        
+
         return response_data
 
     async def set_fee_per_cost(self) -> int:
@@ -242,7 +242,7 @@ class CircuitRPCClient:
         """
         max_retries = 5
         retry_delay = 60.0  # Wait 60 seconds to allow rate limit window to reset (20 req/min)
-        
+
         for attempt in range(max_retries):
             try:
                 # Truncate lists in params and json_data for logging
@@ -296,7 +296,7 @@ class CircuitRPCClient:
                                 error_msg += f" - Status: {response.status_code}, Content: {response.content}"
                             log.error(error_msg)
                             raise APIError(error_msg, response)
-                    
+
                     # Handle other errors immediately
                     error_msg = f"API request failed: {method} {endpoint}"
                     try:
@@ -320,7 +320,7 @@ class CircuitRPCClient:
                 error_msg = f"Unexpected error during {method} {endpoint}: {e}"
                 log.exception(error_msg)
                 raise APIError(error_msg)
-        
+
         # This should never be reached due to the raise in the loop, but for completeness:
         error_msg = f"API request failed: {method} {endpoint} - Max retries exceeded"
         raise APIError(error_msg)
@@ -395,7 +395,10 @@ class CircuitRPCClient:
             index = int(index)
             if not index >= -1 and index <= 43:
                 raise ValueError("Invalid Statute index. Must be an integer between -1 and 43 included")
-            print(f"Selected Statute: [{index}] {[name for name, idx in statute_indices if idx == index][0]}")
+            if index >= 0:
+                print(f"Selected Statute: [{index}] {[name for name, idx in statute_indices if idx == index][0]}")
+            else:
+                print(f"Selected Statute: [{index}] Custom conditions announcement")
             return index
         elif isinstance(index, str):
             statute_names = [name for name, _ in statute_indices]
@@ -797,7 +800,7 @@ class CircuitRPCClient:
             result = client.vault_deposit(5.0)
             # Deposits 5 XCH as collateral into the vault
         """
-        payload = self._build_transaction_payload({"amount": self._convertumber(amount, "MOJOS")})
+        payload = self._build_transaction_payload({"amount": self._convert_number(amount, "MOJOS")})
         return await self._process_transaction("/vault/deposit", payload)
 
     async def vault_withdraw(self, amount):
@@ -1649,7 +1652,7 @@ class CircuitRPCClient:
 
     ## Vaults ##
     async def upkeep_vaults_list(
-            self, coin_name=None, transferrable_stability_fees=False, liquidatable=False, startable=False, restartable=False,
+            self, coin_name=None, transferable_stability_fees=False, liquidatable=False, startable=False, restartable=False,
             in_liquidation=False, biddable=False, in_bad_debt=False, seized=False, not_seized=False
     ):
         if not seized:
@@ -1657,8 +1660,8 @@ class CircuitRPCClient:
                 seized = None
             else: seized = False
         else: seized = True
-        if not transferrable_stability_fees:
-            transferrable_stability_fees = None
+        if not transferable_stability_fees:
+            transferable_stability_fees = None
         if not liquidatable:
             liquidatable = None
         if not startable:
@@ -1676,7 +1679,7 @@ class CircuitRPCClient:
             response = await self.client.post(
                 f"/vaults/{coin_name}/",
                 json={
-                    "transferrable_sf": transferrable_stability_fees,
+                    "transferable_sf": transferable_stability_fees,
                     "liquidatable": liquidatable,
                     "startable": startable,
                     "restartable": restartable,
@@ -1691,7 +1694,7 @@ class CircuitRPCClient:
         response = await self.client.post(
             "/vaults",
             json={
-                "transferrable_sf": transferrable_stability_fees,
+                "transferable_sf": transferable_stability_fees,
                 "liquidatable": liquidatable,
                 "startable": startable,
                 "restartable": restartable,
@@ -2136,7 +2139,7 @@ class CircuitRPCClient:
         payload = self._build_transaction_payload({})
         return await self._process_transaction("/statutes/update", payload)
 
-    async def statutes_announce(self, *args):
+    async def statutes_announce(self):
         """Publish a statutes announcement transaction.
 
         Creates, signs, and submits the announce transaction which may be

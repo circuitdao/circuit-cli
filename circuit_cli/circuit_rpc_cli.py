@@ -509,7 +509,7 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         help="[optional] Name of vault coin. If specified, info for only this vault is shown",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-t", "--transferrable-stability-fees", action="store_true",
+        "-t", "--transferable-stability-fees", action="store_true",
         help="List vaults from which Stability Fees can be transferred to Treasury",
     )
     upkeep_vaults_list_parser.add_argument(
