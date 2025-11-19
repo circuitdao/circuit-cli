@@ -210,13 +210,14 @@ class CircuitJSONFormatter:
     def _format_list(self, data: List[Any], indent: int = 0, key_lower: str = None) -> str:
         """Format a list with appropriate formatting."""
         if not data:
-            return "[]"
+            # returned empty list
+            return "\nNo results."
 
         lines = []
         prefix = "  " * indent
         bullet = "•" if True else "-"
 
-        # LATER: uncommment below if we change (full_)implemented_statutes from dict to list of lists (idx, name, value)
+        # LATER: uncomment below if we change (full_)implemented_statutes from dict to list of lists (idx, name, value)
         #if key_lower is not None and "implemented_statutes" in key_lower:
         #    for i, name, value in data:
         #        idx = f"[{i:02d}]"

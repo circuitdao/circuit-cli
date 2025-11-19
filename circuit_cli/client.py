@@ -2,6 +2,7 @@ import asyncio
 import logging
 import logging.config
 import sys
+import time
 from math import floor
 from typing import Any, Dict, Optional
 
@@ -148,6 +149,8 @@ class CircuitRPCClient:
         self.progress_handler = None
         # When True, print each HTTP endpoint used to stderr (human-friendly tracing)
         self.show_endpoints: bool = False
+        # Cache for /statutes endpoint responses (key: full param, value: (response, timestamp))
+        self._statutes_cache: Dict[bool, tuple[dict, float]] = {}
 
     async def _emit_progress(self, event: Dict[str, Any]):
         """Emit a progress event to the configured handler if set."""
@@ -162,6 +165,34 @@ class CircuitRPCClient:
         except Exception as e:
             log.debug(f"Progress handler raised exception: {e}")
 
+    async def _get_statutes_cached(self, full: bool = False) -> dict[str, Any]:
+        """Get statutes with 1-minute caching to avoid bombarding the server.
+        
+        Args:
+            full: If True, return the full set of statute definitions and metadata.
+            
+        Returns:
+            Cached or fresh statutes response data.
+        """
+        current_time = time.time()
+        cache_ttl = 60  # 1 minute cache
+        
+        # Check if we have a valid cached response
+        if full in self._statutes_cache:
+            cached_response, cached_time = self._statutes_cache[full]
+            if current_time - cached_time < cache_ttl:
+                log.debug(f"Using cached /statutes response (full={full}, age={current_time - cached_time:.1f}s)")
+                return cached_response
+        
+        # No valid cache, make fresh request
+        log.debug(f"Fetching fresh /statutes response (full={full})")
+        response_data = await self._make_api_request("POST", "/statutes", {"full": full})
+        
+        # Store in cache
+        self._statutes_cache[full] = (response_data, current_time)
+        
+        return response_data
+
     async def set_fee_per_cost(self) -> int:
         """Resolve and set fee_per_cost based on preset or explicit value.
 
@@ -172,12 +203,12 @@ class CircuitRPCClient:
             self.fee_per_cost = 0.0
         elif self._fee_per_cost in ("fast", "medium"):
             try:
-                response_data = await self._make_api_request("POST", "/statutes", {"full": False})
+                response_data = await self._get_statutes_cached(full=False)
                 fee_per_costs = response_data.get("fee_per_costs")
-                self.fee_per_cost = fee_per_costs.get(self._fee_per_cost)
+                self.fee_per_cost = float(fee_per_costs.get(self._fee_per_cost))
             except APIError:
                 log.warning(f"Failed to resolve fee_per_cost={self._fee_per_cost} from statutes endpoint.")
-                self.fee_per_cost = float(self._fee_per_cost)
+                self.fee_per_cost = 0.5
         else:
             self.fee_per_cost = float(self._fee_per_cost)
         log.info("Set fee_per_cost to: %s", self.fee_per_cost)
@@ -209,60 +240,90 @@ class CircuitRPCClient:
             APIError: If the request fails or a network error occurs.
             ValueError: If an unsupported HTTP method is used.
         """
-        try:
-            # Truncate lists in params and json_data for logging
-            log_params = {k: truncate_list(v) for k, v in (params or {}).items()}
-            log_json = {k: truncate_list(v) for k, v in (json_data or {}).items()}
+        max_retries = 5
+        retry_delay = 60.0  # Wait 60 seconds to allow rate limit window to reset (20 req/min)
+        
+        for attempt in range(max_retries):
+            try:
+                # Truncate lists in params and json_data for logging
+                log_params = {k: truncate_list(v) for k, v in (params or {}).items()}
+                log_json = {k: truncate_list(v) for k, v in (json_data or {}).items()}
 
-            # Emit progress event for RPC request
-            await self._emit_progress({
-                "event": "rpc_request",
-                "method": method.upper(),
-                "endpoint": endpoint,
-                "message": f"Making {method.upper()} request to {endpoint}"
-            })
+                # Emit progress event for RPC request
+                await self._emit_progress({
+                    "event": "rpc_request",
+                    "method": method.upper(),
+                    "endpoint": endpoint,
+                    "message": f"Making {method.upper()} request to {endpoint}"
+                })
 
-            log.info(f"Making request to {method} {endpoint} with params {log_params} and json_data {log_json}")
-            # Optional human-friendly endpoint trace in text mode
-            if getattr(self, "show_endpoints", False):
-                try:
-                    import sys as _sys
+                log.info(f"Making request to {method} {endpoint} with params {log_params} and json_data {log_json}")
+                # Optional human-friendly endpoint trace in text mode
+                if getattr(self, "show_endpoints", False):
+                    try:
+                        import sys as _sys
 
-                    base = getattr(self, "base_url", "")
-                    _sys.stderr.write(f"→ HTTP {method.upper()} {base}{endpoint}\n")
-                    _sys.stderr.flush()
-                except Exception:
-                    pass
-            if method.upper() == "GET":
-                response = await self.client.get(endpoint, params=params)
-            elif method.upper() == "POST":
-                response = await self.client.post(endpoint, json=json_data)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
+                        base = getattr(self, "base_url", "")
+                        _sys.stderr.write(f"→ HTTP {method.upper()} {base}{endpoint}\n")
+                        _sys.stderr.flush()
+                    except Exception:
+                        pass
+                if method.upper() == "GET":
+                    response = await self.client.get(endpoint, params=params)
+                elif method.upper() == "POST":
+                    response = await self.client.post(endpoint, json=json_data)
+                else:
+                    raise ValueError(f"Unsupported HTTP method: {method}")
 
-            if response.is_error:
-                error_msg = f"API request failed: {method} {endpoint}"
-                try:
-                    error_detail = response.json().get("detail", str(response.content))
-                    error_msg += f" - {error_detail}"
-                except Exception:
-                    error_msg += f" - Status: {response.status_code}, Content: {response.content}"
+                if response.is_error:
+                    # Check for 429 rate limit error
+                    if response.status_code == 429:
+                        if attempt < max_retries - 1:
+                            # Wait for rate limit window to reset (60s for 20 req/min limit)
+                            log.warning(
+                                f"Rate limit exceeded (429) for {method} {endpoint}. "
+                                f"Retrying in {retry_delay:.1f} seconds (attempt {attempt + 1}/{max_retries})..."
+                            )
+                            await asyncio.sleep(retry_delay)
+                            continue  # Retry the request
+                        else:
+                            # Max retries reached
+                            error_msg = f"API request failed after {max_retries} retries due to rate limiting: {method} {endpoint}"
+                            try:
+                                error_detail = response.json().get("detail", str(response.content))
+                                error_msg += f" - {error_detail}"
+                            except Exception:
+                                error_msg += f" - Status: {response.status_code}, Content: {response.content}"
+                            log.error(error_msg)
+                            raise APIError(error_msg, response)
+                    
+                    # Handle other errors immediately
+                    error_msg = f"API request failed: {method} {endpoint}"
+                    try:
+                        error_detail = response.json().get("detail", str(response.content))
+                        error_msg += f" - {error_detail}"
+                    except Exception:
+                        error_msg += f" - Status: {response.status_code}, Content: {response.content}"
 
-                log.error(error_msg)
-                raise APIError(error_msg, response)
+                    log.error(error_msg)
+                    raise APIError(error_msg, response)
 
-            return response.json()
+                return response.json()
 
-        except httpx.RequestError as e:
-            error_msg = f"Network error during {method} {endpoint}: {e}"
-            log.exception(error_msg)
-            raise APIError(error_msg)
-        except Exception as e:
-            if isinstance(e, APIError):
-                raise
-            error_msg = f"Unexpected error during {method} {endpoint}: {e}"
-            log.exception(error_msg)
-            raise APIError(error_msg)
+            except httpx.RequestError as e:
+                error_msg = f"Network error during {method} {endpoint}: {e}"
+                log.exception(error_msg)
+                raise APIError(error_msg)
+            except Exception as e:
+                if isinstance(e, APIError):
+                    raise
+                error_msg = f"Unexpected error during {method} {endpoint}: {e}"
+                log.exception(error_msg)
+                raise APIError(error_msg)
+        
+        # This should never be reached due to the raise in the loop, but for completeness:
+        error_msg = f"API request failed: {method} {endpoint} - Max retries exceeded"
+        raise APIError(error_msg)
 
     def _build_base_payload(self, **kwargs) -> Dict[str, Any]:
         """Build base payload with synthetic_pks and other common fields."""
@@ -2058,8 +2119,7 @@ class CircuitRPCClient:
         Args:
             full: If True, return the full set of statute definitions and metadata.
         """
-        payload = self._build_base_payload(full=full)
-        return await self._make_api_request("POST", "/statutes", payload)
+        return await self._get_statutes_cached(full=full)
 
     async def statutes_update(self, info=False):
         """Update protocol statutes on-chain.
