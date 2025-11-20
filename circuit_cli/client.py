@@ -887,48 +887,18 @@ class CircuitRPCClient:
         return await self._make_api_request("POST", "/savings", payload)
 
     async def savings_deposit(self, amount, interest=None):
-        response = self.client.post(
-            "/savings/deposit",
-            json={
-                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                "amount": self._convert_number(amount, "MCAT"),
-                "treasury_withdraw_amount": self._convert_number(interest, "MCAT"),
-                "fee_per_cost": self.fee_per_cost,
-            },
-        )
-        if response.is_error:
-            print(response.content)
-            response.raise_for_status()
-        data = response.json()
-        if "message" in data.keys():
-            return data
-        bundle: SpendBundle = SpendBundle.from_json_dict(data["bundle"])
-        sig_response = await self.sign_and_push(bundle)
-        signed_bundle = SpendBundle.from_json_dict(sig_response["bundle"])
-        await self.wait_for_confirmation(signed_bundle)
-        return sig_response
+        payload = self._build_transaction_payload({
+            "amount": self._convert_number(amount, "MCAT"),
+            "treasury_withdraw_amount": self._convert_number(interest, "MCAT"),
+        })
+        return await self._process_transaction("/savings/deposit", payload)
 
     async def savings_withdraw(self, amount, interest=None):
-        response = self.client.post(
-            "/savings/withdraw",
-            json={
-                "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                "amount": self._convert_number(amount, "MCAT"),
-                "treasury_withdraw_amount": self._convert_number(interest, "MCAT"),
-                "fee_per_cost": self.fee_per_cost,
-            },
-        )
-        if response.is_error:
-            print(response.content)
-            response.raise_for_status()
-        data = response.json()
-        if "message" in data.keys():
-            return data
-        bundle: SpendBundle = SpendBundle.from_json_dict(data["bundle"])
-        sig_response = await self.sign_and_push(bundle)
-        signed_bundle = SpendBundle.from_json_dict(sig_response["bundle"])
-        await self.wait_for_confirmation(signed_bundle)
-        return sig_response
+        payload = self._build_transaction_payload({
+            "amount": self._convert_number(amount, "MCAT"),
+            "treasury_withdraw_amount": self._convert_number(interest, "MCAT"),
+        })
+        return await self._process_transaction("/savings/withdraw", payload)
 
     ### ANNOUNCERS ###
     async def announcer_show(
