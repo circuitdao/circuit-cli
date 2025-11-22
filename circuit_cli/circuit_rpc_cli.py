@@ -782,7 +782,7 @@ Example:
         "amounts",
         type=float,
         nargs="+",
-        help="Amounts in XCH for the resulting coins (space-separated)"
+        help="Amounts in XCH for the resulting coins (space-separated). A change coin is automatically generated"
     )
     wallet_split_parser.add_argument(
         "--target-puzzle-hashes",
