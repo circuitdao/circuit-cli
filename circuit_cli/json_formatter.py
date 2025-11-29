@@ -52,7 +52,7 @@ class CircuitJSONFormatter:
             r".*min_deposit.*",
             r"^(?!.*\b(collateral_ratio)\b).*collateral.*",
             r"^(?!.*(stability|initiator).*).*fee.*",
-            r".*withdraw.*",
+            r"^(?!.*\b(accrued_interest_withdrawable)\b).*withdraw.*",
             r".*xch.*",
         ]
 

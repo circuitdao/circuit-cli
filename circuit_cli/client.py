@@ -1077,12 +1077,26 @@ class CircuitRPCClient:
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
     ### UPKEEP ###
-    async def upkeep_invariants(self):
+    async def upkeep_invariants(self, exports=False):
         """Fetch protocol invariants from the RPC server.
 
         Returns a static snapshot of invariant checks useful for diagnostics.
         """
-        return await self._make_api_request("GET", "/protocol/invariants")
+        response = await self._make_api_request("GET", "/protocol/invariants")
+
+        if not exports:
+            return response
+
+        print("ENVIRONMENT VARIABLES:             !BACKUP THESE!")
+        print("export CIRCUIT_STATUTES_STRUCT=" + response["statutes_struct_serialized"])
+        print(
+            f"export CIRCUIT_ANNOUNCER_REGISTRY_CONSTRAINTS="
+            f'"{response["registry_maximum_rewards_per_interval"]},{response["registry_minimum_rewards_interval"]}"'
+        )
+        print("export CIRCUIT_GENESIS_COIN_NAME=" + response["genesis_coin_name"])
+        print("export CIRCUIT_ANNOUNCER_REGISTRY_EVE_COIN_NAME=" + response["registry_eve_coin_name"])
+        print("export CIRCUIT_APPROVED_MOD_HASHES=" + response["approval_mod_hashes_serialized"])
+
 
     async def upkeep_state(
         self, vaults=False, surplus_auctions=False, recharge_auctions=False, treasury=False, bills=False
@@ -2086,7 +2100,7 @@ class CircuitRPCClient:
         return await self._process_transaction("/oracle/update", payload)
 
     ### STATUTES ###
-    async def statutes_list(self, full=False):
+    async def statutes_list(self, full=False, exports=False):
         """List protocol statutes.
 
         Args:

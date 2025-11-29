@@ -141,11 +141,14 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
     )
 
     ## protocol info ##
-    upkeep_subparsers.add_parser(
+    upkeep_invariants_subparser = upkeep_subparsers.add_parser(
         "invariants",
         help="Show protocol invariants",
-        description="Shows BYC and CRT asset IDs and various other invariants.",
+        description="Shows BYC and CRT asset IDs and various other invariants of Circuit protocol.",
     )  # LATER: added launcher ID of Statutes (& Oracle?)
+    upkeep_invariants_subparser.add_argument(
+        "--exports", action="store_true", help="Print backend environment variable exports"
+    )
 
     ## protocol state ##
     upkeep_state_parser = upkeep_subparsers.add_parser(
@@ -976,7 +979,8 @@ Example:
 Deposits BYC to savings vault.
 
 By default, all accrued interest is withdrawn from treasury to savings vault on every deposit.
-To get paid a different amount of interest (incl 0), specify the desired value via INTEREST argument.
+This fails if accured interest does not exceed Minimum Treasury Delta. In this case specify INTEREST = 0.
+To get paid a non-default amount of interest, specify the desired value via INTEREST argument.
 """
     )
     savings_deposit_subparser.add_argument("amount", type=float, help="Amount of BYC to deposit")
@@ -994,7 +998,8 @@ To get paid a different amount of interest (incl 0), specify the desired value v
 Withdraw BYC from savings vault.
 
 By default, all accrued interest is withdrawn from treasury to savings vault on every withdrawal.
-To get paid a different amount of interest (incl 0), specify the desired value via INTEREST argument.
+This fails if accured interest does not exceed Minimum Treasury Delta. In this case specify INTEREST = 0.
+To get paid a non-default amount of interest, specify the desired value via INTEREST argument.
 """
     )
     savings_withdraw_subparser.add_argument("amount", type=float, help="Amount of BYC to withdraw")
@@ -1003,7 +1008,7 @@ To get paid a different amount of interest (incl 0), specify the desired value v
         nargs="?",
         type=float,
         default=None,
-        help="[optional] Amount (in BYC) of accrued interest to withdraw from treasury to savings vault. By default, all accrued interest is withdrawn",
+        help="[optional] Amount (in BYC) of accrued interest to withdraw from treasury to savings vault",
     )
 
     args = parser.parse_args()

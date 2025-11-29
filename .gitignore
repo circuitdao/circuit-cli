@@ -189,3 +189,6 @@ cython_debug/
 
 # ignore statutes ranges toml file
 statutes_ranges.toml
+
+# shell scripts
+run_sync_loop.sh
