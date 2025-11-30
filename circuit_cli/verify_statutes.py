@@ -88,8 +88,9 @@ def verify_statutes(
 ) -> bool:
 
     # find statute name
-    assert statute_indices[index][1] == index
-    bill_statute_name = statute_indices[index][0]
+    if index >= 0:
+        assert statute_indices[index][1] == index
+        bill_statute_name = statute_indices[index][0]
 
     # update statutes according to proposed bill
     if value is not None:
@@ -110,17 +111,23 @@ def verify_statutes(
             # no reason to ever set custom condition Statute value to anything but nil
             raise ValueError(f"Do not propose a new Statue value for {bill_statute_name}. To announce custom conditions, specify Statute index -1, not 3")
         # overwrite current with proposed statute value
-        full_statutes[bill_statute_name]["value"] = (
-            int(value) if index not in [0, 3] else (value if index != -1 else Program.to(value))
-        )
-    if proposal_threshold is not None:
-        full_statutes[bill_statute_name]["threshold_amount_to_propose"] = proposal_threshold
-    if veto_interval is not None:
-        full_statutes[bill_statute_name]["veto_interval"] = veto_interval
-    if implementation_delay is not None:
-        full_statutes[bill_statute_name]["implementation_delay"] = implementation_delay
-    if max_delta is not None:
-        full_statutes[bill_statute_name]["max_delta"] = max_delta
+        if index >= 0:
+            full_statutes[bill_statute_name]["value"] = (
+                int(value) if index not in [0, 3] else (value if index != -1 else Program.to(value))
+            )
+
+    if index >= 0:
+        if proposal_threshold is not None:
+            full_statutes[bill_statute_name]["threshold_amount_to_propose"] = proposal_threshold
+        if veto_interval is not None:
+            full_statutes[bill_statute_name]["veto_interval"] = veto_interval
+        if implementation_delay is not None:
+            full_statutes[bill_statute_name]["implementation_delay"] = implementation_delay
+        if max_delta is not None:
+            full_statutes[bill_statute_name]["max_delta"] = max_delta
+
+    if index == -1:
+        bill_statute_name = "Custom conditions announcement"
 
     # load acceptable ranges from file
     r = load_ranges()
