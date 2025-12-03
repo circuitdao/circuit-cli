@@ -1,6 +1,5 @@
 import re
 import tomllib
-from typing import Tuple
 from pathlib import Path
 from math import ceil
 
@@ -36,11 +35,11 @@ def parse(s: str) -> int | float:
     CONVERSIONS = {
         "min": 60,
         "hr": 3600,
-        "d": 24*3600,
+        "d": 24 * 3600,
     }
 
     if not s:
-        return float('inf')
+        return float("inf")
 
     # 1. Try to match a unit
     unit_factor = 1  # default: no conversion
@@ -65,10 +64,9 @@ def parse(s: str) -> int | float:
         number = int(num_str)
     else:
         # 4. Large number (>= 1000): must have correct _ grouping
-        if not re.fullmatch(r'\d{1,3}(?:_\d{3})+', num_str):
+        if not re.fullmatch(r"\d{1,3}(?:_\d{3})+", num_str):
             raise ValueError(
-                f"Invalid number format in '{s}'. "
-                "For numbers >= 1000, must use '_' every 3 digits: e.g. '1_234_567'"
+                f"Invalid number format in '{s}'. For numbers >= 1000, must use '_' every 3 digits: e.g. '1_234_567'"
             )
         number = int(num_str.replace("_", ""))
 
@@ -76,17 +74,20 @@ def parse(s: str) -> int | float:
     return number * unit_factor
 
 
-def verify_statutes(
-        statute_indices: list[tuple[str, int]],
-        full_statutes: dict, # as expected immediately prior to bill implementation
-        index: int,
-        value: str | None,
-        proposal_threshold: int  | None,
-        veto_interval: int | None,
-        implementation_delay: int | None,
-        max_delta: int | None,
-) -> bool:
+def is_non_negative_int(value) -> bool:
+    return isinstance(value, int) and value >= 0
 
+
+def verify_statutes(
+    statute_indices: list[tuple[str, int]],
+    full_statutes: dict,  # as expected immediately prior to bill implementation
+    index: int,
+    value: str | None,
+    proposal_threshold: int | None,
+    veto_interval: int | None,
+    implementation_delay: int | None,
+    max_delta: int | None,
+) -> bool:
     # find statute name
     if index >= 0:
         assert statute_indices[index][1] == index
@@ -98,32 +99,50 @@ def verify_statutes(
         if index == -1:
             try:
                 Program.fromhex(value)
-            except Exception as err:
-                print(f"Invalid custom conditions announcement proposed. Custom conditions must be a hex string convertible to Program")
-                return False
+            except Exception:
+                raise ValueError(
+                    f"Invalid custom conditions announcement proposed. "
+                    f"Custom conditions must be a hex string convertible to Program, got {value}"
+                )
         if index == 0:
             try:
                 bytes32.from_hexstr(value)
-            except Exception as err:
-                print(f"Invalid {bill_statute_name} proposed. Must be a hex string convertible to bytes32")
-                return False
+            except Exception:
+                raise ValueError(f"Invalid {bill_statute_name} proposed. Must be a hex string convertible to bytes32")
         if index == 3:
             # no reason to ever set custom condition Statute value to anything but nil
-            raise ValueError(f"Do not propose a new Statue value for {bill_statute_name}. To announce custom conditions, specify Statute index -1, not 3")
+            raise ValueError(
+                f"Do not propose a new Statue value for {bill_statute_name}. "
+                f"To announce custom conditions, specify Statute index -1, not 3"
+            )
         # overwrite current with proposed statute value
         if index >= 0:
-            full_statutes[bill_statute_name]["value"] = (
-                int(value) if index not in [0, 3] else (value if index != -1 else Program.to(value))
-            )
+            if index not in [0, 3]:
+                try:
+                    value = int(value)
+                except Exception:
+                    raise ValueError(
+                        f"Proposed value for Statute [{index}] {bill_statute_name} must be "
+                        f"convertible to a non-negative integer, got {value}"
+                    )
+            full_statutes[bill_statute_name]["value"] = value
 
     if index >= 0:
         if proposal_threshold is not None:
+            if not is_non_negative_int(proposal_threshold):
+                raise ValueError(f"Proposal threshold must be a non-negative integer, got {proposal_threshold}")
             full_statutes[bill_statute_name]["threshold_amount_to_propose"] = proposal_threshold
         if veto_interval is not None:
+            if not is_non_negative_int(veto_interval):
+                raise ValueError(f"Veto interval must be a non-negative integer, got {veto_interval}")
             full_statutes[bill_statute_name]["veto_interval"] = veto_interval
         if implementation_delay is not None:
+            if not is_non_negative_int(implementation_delay):
+                raise ValueError(f"Implementation delay must be a non-negative integer, got {implementation_delay}")
             full_statutes[bill_statute_name]["implementation_delay"] = implementation_delay
         if max_delta is not None:
+            if not is_non_negative_int(max_delta):
+                raise ValueError(f"Max delta must be a non-negative integer, got {max_delta}")
             full_statutes[bill_statute_name]["max_delta"] = max_delta
 
     if index == -1:
@@ -131,10 +150,9 @@ def verify_statutes(
 
     # load acceptable ranges from file
     r = load_ranges()
-    default_constraints = r["default_constraints"]
 
     # verify all statutes
-    failed = [] # keep track of failed verifications
+    failed = []  # keep track of failed verifications
     for idx in range(len(full_statutes)):
         indent = "" if idx == index else "  "
 
@@ -184,11 +202,15 @@ def verify_statutes(
             if "min" in section:
                 boundary = parse(section["min"])
                 if not value >= boundary:
-                    failed.append(f"{indent}{statute_name}: {c.replace('_',' ')} below acceptable min ({value}<{boundary})")
+                    failed.append(
+                        f"{indent}{statute_name}: {c.replace('_', ' ')} below acceptable min ({value}<{boundary})"
+                    )
             if "max" in section:
                 boundary = parse(section["max"])
                 if not value <= boundary:
-                    failed.append(f"{indent}{statute_name}: {c.replace('_',' ')} above acceptable max ({value}>{boundary})")
+                    failed.append(
+                        f"{indent}{statute_name}: {c.replace('_', ' ')} above acceptable max ({value}>{boundary})"
+                    )
 
     # Minimum debt, LP and initiator incentives
     relevant_statutes = [
@@ -205,7 +227,9 @@ def verify_statutes(
     remaining_liquidation_penalty = min_debt_byc * liquidation_penalty - initiator_incentive_byc
     if not remaining_liquidation_penalty > 0:
         indent = "" if bill_statute_name in relevant_statutes else "  "
-        failed.append(f"{indent}{', '.join(relevant_statutes)}: Initiator Incentive can be larger than Liquidation Penalty")
+        failed.append(
+            f"{indent}{', '.join(relevant_statutes)}: Initiator Incentive can be larger than Liquidation Penalty"
+        )
 
     # Minimum auction price
     max_allowed_deviation = 0.01
@@ -217,18 +241,22 @@ def verify_statutes(
         "VAULT_AUCTION_MINIMUM_PRICE_FACTOR_BPS",
     ]
     auction_ttl = full_statutes["VAULT_AUCTION_TTL"]["value"]
-    starting_price_factor = full_statutes["VAULT_AUCTION_STARTING_PRICE_FACTOR_BPS"]["value"] / 10_000.0 # of statutes price
+    starting_price_factor = (
+        full_statutes["VAULT_AUCTION_STARTING_PRICE_FACTOR_BPS"]["value"] / 10_000.0
+    )  # of statutes price
     price_ttl = full_statutes["VAULT_AUCTION_PRICE_TTL"]["value"]
-    decrease_factor = full_statutes["VAULT_AUCTION_PRICE_DECREASE_BPS"]["value"] / 10_000.0 # of starting price
-    decrease = decrease_factor * starting_price_factor # of statutes price
+    decrease_factor = full_statutes["VAULT_AUCTION_PRICE_DECREASE_BPS"]["value"] / 10_000.0  # of starting price
+    decrease = decrease_factor * starting_price_factor  # of statutes price
     max_num_decreases = ceil(auction_ttl / price_ttl) - 1
-    implicit_min_price = starting_price_factor - (max_num_decreases * decrease) # of statutes price
-    min_price_factor = full_statutes["VAULT_AUCTION_MINIMUM_PRICE_FACTOR_BPS"]["value"] / 10_000.0 # of statutes price
-    min_price = min_price_factor * starting_price_factor # of statutes price
-    min_price_deviation = min_price - implicit_min_price # of statutes price
-    if abs(min_price_deviation) > max_allowed_deviation: # devition of less than 1% is ok
+    implicit_min_price = starting_price_factor - (max_num_decreases * decrease)  # of statutes price
+    min_price_factor = full_statutes["VAULT_AUCTION_MINIMUM_PRICE_FACTOR_BPS"]["value"] / 10_000.0  # of statutes price
+    min_price = min_price_factor * starting_price_factor  # of statutes price
+    min_price_deviation = min_price - implicit_min_price  # of statutes price
+    if abs(min_price_deviation) > max_allowed_deviation:  # devition of less than 1% is ok
         indent = "" if bill_statute_name in relevant_statutes else "  "
-        failed.append(f"{indent}{', '.join(relevant_statutes)}: Implicit minimum auction price deviates by more than {100*max_allowed_deviation:.1f}% from Minimum Auction Price ({implicit_min_price} vs. {min_price})")
+        failed.append(
+            f"{indent}{', '.join(relevant_statutes)}: Implicit minimum auction price deviates by more than {100 * max_allowed_deviation:.1f}% from Minimum Auction Price ({implicit_min_price} vs. {min_price})"
+        )
 
     if failed:
         if any(bill_statute_name in msg for msg in failed):

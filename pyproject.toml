@@ -9,7 +9,7 @@ authors = [
 readme = "README.md"
 keywords = ["circuit", "chia", "blockchain", "dao", "cli"]
 license = {text = "Proprietary"}
-requires-python = "^3.11"
+requires-python = ">=3.11"
 dependencies = []
 classifiers = [
   "Programming Language :: Python :: 3",

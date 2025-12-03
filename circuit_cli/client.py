@@ -1991,10 +1991,10 @@ class CircuitRPCClient:
         value: str = None,
         coin_name: str = None,
         force: bool = False,
-        proposal_threshold=None,
-        veto_interval=None,
-        implementation_delay=None,
-        max_delta=None,
+        proposal_threshold: int = None,
+        veto_interval: int = None,
+        implementation_delay: int = None,
+        max_delta: int = None,
         label=None,
     ):
 
