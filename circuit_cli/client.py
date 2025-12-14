@@ -3,7 +3,8 @@ import logging
 import logging.config
 import sys
 import time
-from math import floor
+from math import floor, ceil
+
 from typing import Any, Dict, Optional
 
 import httpx
@@ -250,12 +251,14 @@ class CircuitRPCClient:
                 log_json = {k: truncate_list(v) for k, v in (json_data or {}).items()}
 
                 # Emit progress event for RPC request
-                await self._emit_progress({
-                    "event": "rpc_request",
-                    "method": method.upper(),
-                    "endpoint": endpoint,
-                    "message": f"Making {method.upper()} request to {endpoint}"
-                })
+                await self._emit_progress(
+                    {
+                        "event": "rpc_request",
+                        "method": method.upper(),
+                        "endpoint": endpoint,
+                        "message": f"Making {method.upper()} request to {endpoint}",
+                    }
+                )
 
                 log.info(f"Making request to {method} {endpoint} with params {log_params} and json_data {log_json}")
                 # Optional human-friendly endpoint trace in text mode
@@ -346,13 +349,13 @@ class CircuitRPCClient:
         base_payload.update(endpoint_specific_data)
         return base_payload
 
-    def _convert_number(self, number: str | float | int | None, unit_type: str = None, ceil=False) -> int | None:
+    def _convert_number(self, number: str | float | int | None, unit_type: str = None, round_up=False) -> int | None:
         """Convert a human-friendly number to on-chain units (if not already in on-chain units).
 
         Args:
             number: A str or float in human-friendly units, an int in on-chain units, or None.
             unit_type: Unit type to convert to. One of: "MOJOS", "MCAT", "PRICE".
-            ceil: By default, converted numbers are rounded down, if ceil is True, converted number is rounded up.
+            round_up: By default, converted numbers are rounded down, if ceil is True, converted number is rounded up.
 
         Returns:
             Integer number of base units according to the selected unit_type.
@@ -365,17 +368,17 @@ class CircuitRPCClient:
             return None
         if isinstance(number, (str, float)):
             if unit_type == "MOJOS":
-                if ceil:
+                if round_up:
                     return ceil(number * self.consts["MOJOS"])
                 else:
                     return floor(number * self.consts["MOJOS"])
             elif unit_type == "MCAT":
-                if ceil:
+                if round_up:
                     return ceil(number * self.consts["MCAT"])
                 else:
                     return floor(number * self.consts["MCAT"])
             elif unit_type == "PRICE":
-                if ceil:
+                if round_up:
                     return ceil(number * self.consts["price_PRECISION"])
                 else:
                     return floor(number * self.consts["price_PRECISION"])
@@ -406,7 +409,9 @@ class CircuitRPCClient:
             if not matches:
                 raise ValueError(f"Failed to match {index} to a Statute name")
             if len(matches) > 1:
-                raise ValueError(f"Failed to unambiguously match {index} to a Statute name. Matches: {', '.join(matches)}")
+                raise ValueError(
+                    f"Failed to unambiguously match {index} to a Statute name. Matches: {', '.join(matches)}"
+                )
             print(f"Selected Statute: [{[idx for name, idx in statute_indices if name == matches[0]][0]}] {matches[0]}")
             index = [idx for name, idx in statute_indices if name == matches[0]][0]
             return index
@@ -543,6 +548,7 @@ class CircuitRPCClient:
                         response.raise_for_status()
                     data = response.json()
                     status = data.get("status")
+                    log.debug("Tx Status: %s", status)
                     # Include any extra fields to help the UI
                     ev = {"event": "poll", "attempt": attempt, "status": status, "tx_id": tx_id}
                     await self._emit_progress(ev)
@@ -599,7 +605,9 @@ class CircuitRPCClient:
         signed_bundle = await sign_spends(bundle.coin_spends, self.synthetic_secret_keys, add_data=self.add_sig_data)
         return signed_bundle
 
-    async def sign_and_push(self, bundle: SpendBundle, error_handling_info: dict = None, sign=True, tx_type: str = None):
+    async def sign_and_push(
+        self, bundle: SpendBundle, error_handling_info: dict = None, sign=True, tx_type: str = None
+    ):
         """Sign a SpendBundle locally and push it to the RPC service.
 
         Args:
@@ -636,7 +644,7 @@ class CircuitRPCClient:
             try:
                 # Use input() for synchronous user input
                 response = input("Do you want to proceed with this transaction? (y/N): ").strip().lower()
-                if response not in ['y', 'yes']:
+                if response not in ["y", "yes"]:
                     print("❌ Transaction cancelled by user.")
                     raise APIError("Transaction cancelled by user approval")
                 print("✅ Transaction approved by user.")
@@ -649,7 +657,7 @@ class CircuitRPCClient:
         push_event = {
             "event": "transaction_push",
             "tx_id": tx_id,
-            "message": f"Pushing {'signed ' if sign else ''}transaction{f' ({tx_type})' if tx_type else ''}"
+            "message": f"Pushing {'signed ' if sign else ''}transaction{f' ({tx_type})' if tx_type else ''}",
         }
         if tx_type:
             push_event["transaction_type"] = tx_type
@@ -887,24 +895,35 @@ class CircuitRPCClient:
         return await self._make_api_request("POST", "/savings", payload)
 
     async def savings_deposit(self, amount, interest=None):
-        payload = self._build_transaction_payload({
-            "amount": self._convert_number(amount, "MCAT"),
-            "treasury_withdraw_amount": self._convert_number(interest, "MCAT"),
-        })
+        payload = self._build_transaction_payload(
+            {
+                "amount": self._convert_number(amount, "MCAT"),
+                "treasury_withdraw_amount": self._convert_number(interest, "MCAT"),
+            }
+        )
         return await self._process_transaction("/savings/deposit", payload)
 
     async def savings_withdraw(self, amount, interest=None):
-        payload = self._build_transaction_payload({
-            "amount": self._convert_number(amount, "MCAT"),
-            "treasury_withdraw_amount": self._convert_number(interest, "MCAT"),
-        })
+        payload = self._build_transaction_payload(
+            {
+                "amount": self._convert_number(amount, "MCAT"),
+                "treasury_withdraw_amount": self._convert_number(interest, "MCAT"),
+            }
+        )
         return await self._process_transaction("/savings/withdraw", payload)
 
     ### ANNOUNCERS ###
     async def announcer_show(
-            self, approved=False, unapproved=False, valid=False, invalid=False,
-            penalizable=False, non_penalizable=False, registered=False, unregistered=False,
-            incl_spent=False
+        self,
+        approved=False,
+        unapproved=False,
+        valid=False,
+        invalid=False,
+        penalizable=False,
+        non_penalizable=False,
+        registered=False,
+        unregistered=False,
+        incl_spent=False,
     ):
         """List announcer coins with optional filters.
 
@@ -918,35 +937,47 @@ class CircuitRPCClient:
             A list of announcer coin records returned by the RPC service.
         """
         if (
-                (approved and unapproved)
-                or (valid and invalid)
-                or (penalizable and non_penalizable)
-                or (registered and unregistered)
+            (approved and unapproved)
+            or (valid and invalid)
+            or (penalizable and non_penalizable)
+            or (registered and unregistered)
         ):
             return []
         if not approved:
             if not unapproved:
                 approved = None
-            else: approved = False
-        else: approved = True
+            else:
+                approved = False
+        else:
+            approved = True
         if not valid:
             if not invalid:
                 valid = None
-            else: valid = False
-        else: valid = True
+            else:
+                valid = False
+        else:
+            valid = True
         if not penalizable:
             if not non_penalizable:
                 penalizable = None
-            else: penalizable = False
-        else: penalizable = True
+            else:
+                penalizable = False
+        else:
+            penalizable = True
         if not registered:
             if not unregistered:
                 registered = None
-            else: registered = False
-        else: registered = True
+            else:
+                registered = False
+        else:
+            registered = True
 
         payload = self._build_base_payload(
-            approved=approved, valid=valid, penalizable=penalizable, registered=registered, include_spent_coins=incl_spent
+            approved=approved,
+            valid=valid,
+            penalizable=penalizable,
+            registered=registered,
+            include_spent_coins=incl_spent,
         )
         data = await self._make_api_request("POST", "/announcer", payload)
         assert isinstance(data, list)
@@ -1005,9 +1036,9 @@ class CircuitRPCClient:
             The transaction result from processing the configuration update.
         """
 
-        assert not (cancel_deactivation and deactivate), (
-            "Cannot both deactivate and cancel deactivation at the same time"
-        )
+        assert not (
+            cancel_deactivation and deactivate
+        ), "Cannot both deactivate and cancel deactivation at the same time"
 
         coin_name = await self._get_coin_name_if_needed(coin_name, "/announcer", "No announcer found")
 
@@ -1036,7 +1067,9 @@ class CircuitRPCClient:
             coin_name, "/announcer", "No valid announcer found", payload_extras={"approved": True, "valid": True}
         )
 
-        payload = self._build_transaction_payload({"operation": "register", "args": {"target_puzzle_hash": target_puzzle_hash}})
+        payload = self._build_transaction_payload(
+            {"operation": "register", "args": {"target_puzzle_hash": target_puzzle_hash}}
+        )
         return await self._process_transaction(f"/announcers/{coin_name}/", payload)
 
     async def announcer_exit(self, coin_name):
@@ -1139,9 +1172,17 @@ class CircuitRPCClient:
 
     ## Announcer ##
     async def upkeep_announcers_list(
-        self, coin_name=None, approved=False, unapproved=False, valid=False, invalid=False,
-        penalizable=False, non_penalizable=False, registered=False, unregistered=False,
-        incl_spent=False
+        self,
+        coin_name=None,
+        approved=False,
+        unapproved=False,
+        valid=False,
+        invalid=False,
+        penalizable=False,
+        non_penalizable=False,
+        registered=False,
+        unregistered=False,
+        incl_spent=False,
     ):
         """List announcers, optionally filtering and/or targeting a specific coin.
 
@@ -1153,32 +1194,40 @@ class CircuitRPCClient:
             incl_spent: Include spent coins in the listing.
         """
         if (
-                (approved and unapproved)
-                or (valid and invalid)
-                or (penalizable and non_penalizable)
-                or (registered and unregistered)
+            (approved and unapproved)
+            or (valid and invalid)
+            or (penalizable and non_penalizable)
+            or (registered and unregistered)
         ):
             return []
         if not approved:
             if not unapproved:
                 approved = None
-            else: approved = False
-        else: approved = True
+            else:
+                approved = False
+        else:
+            approved = True
         if not valid:
             if not invalid:
                 valid = None
-            else: valid = False
-        else: valid = True
+            else:
+                valid = False
+        else:
+            valid = True
         if not penalizable:
             if not non_penalizable:
                 penalizable = None
-            else: penalizable = False
-        else: penalizable = True
+            else:
+                penalizable = False
+        else:
+            penalizable = True
         if not registered:
             if not unregistered:
                 registered = None
-            else: registered = False
-        else: registered = True
+            else:
+                registered = False
+        else:
+            registered = True
 
         if coin_name:
             payload = {
@@ -1493,7 +1542,7 @@ class CircuitRPCClient:
         """
         args = {
             "byc_amount": self._convert_number(amount, "MCAT"),
-            "crt_amount": self._convert_number(crt, "MCAT", ceil=True),
+            "crt_amount": self._convert_number(crt, "MCAT", round_up=True),
             "target_puzzle_hash": target_puzzle_hash,
             "info": info,
         }
@@ -1572,8 +1621,8 @@ class CircuitRPCClient:
         log.info("Treasury rebalanced")
         return sig_response
 
-    async def upkeep_treasury_launch(self, SUCCESSOR_LAUNCHER_ID=None, create_conditions=False, bill_coin_name=None):
-        if not SUCCESSOR_LAUNCHER_ID:
+    async def upkeep_treasury_launch(self, successor_launcher_id=None, create_conditions=False, bill_coin_name=None, byc_coin_name=None, label=None):
+        if not successor_launcher_id:
             response = await self.client.post(
                 "/treasury",
                 json={},
@@ -1581,7 +1630,7 @@ class CircuitRPCClient:
             data = response.json()
             successor_launcher_id = data["treasury_coins"][0]["launcher_id"]
         else:
-            successor_launcher_id = SUCCESSOR_LAUNCHER_ID
+            successor_launcher_id = successor_launcher_id
 
         if create_conditions:
             assert bill_coin_name is None, "Cannot create custom conditions and implement bill at the same time"
@@ -1600,12 +1649,27 @@ class CircuitRPCClient:
             if response.is_error:
                 print(response.content)
                 response.raise_for_status()
-            return response.json()
+            data = response.json()
+            if label:
+                log.debug("Storing treasury launch byc coin %s with label %s", data["coin_name"], label)
+                with self.store.transaction() as store_data:
+                    store_data[f"treasury.launch.coins.{label}"] = data["coin_name"]
+
+            return data
         else:
             assert bill_coin_name is not None, "Must specify bill to implement when not creating custom conditions"
+            assert byc_coin_name is not None, "Must specify byc coin name when implementing treasury launch bill"
+            # Resolve label for bill_coin_name
+            if bill_coin_name.startswith("<") and bill_coin_name.endswith(">"):
+                bill_label = bill_coin_name[1:-1]
+                bill_coin_name = self.store.get(f"proposals.propose.coins.{bill_label}")
+            # Resolve label for byc_coin_name
+            if byc_coin_name.startswith("<") and byc_coin_name.endswith(">"):
+                byc_label = byc_coin_name[1:-1]
+                byc_coin_name = self.store.get(f"treasury.launch.coins.{byc_label}")
             print(
                 f"Implementing bill {bill_coin_name} to launch treasury coin with {successor_launcher_id} as "
-                f"successor launcher ID"
+                f"successor launcher ID and byc_coin_name {byc_coin_name}"
             )
             bill_response = await self.client.post(
                 "/bills/implement",
@@ -1616,34 +1680,51 @@ class CircuitRPCClient:
                 },
             )
             print("Launching treasury coin with successor launcher ID", successor_launcher_id)
-            implement_bundle = SpendBundle.from_json_dict(bill_response.json())
+            if bill_response.is_error:
+                raise Exception(f"Failed to implement bill: {bill_response.status_code} {bill_response.text}")
+            bundle_dict = bill_response.json()['bundle']
+            implement_bundle = SpendBundle.from_json_dict(bundle_dict)
+
             response = await self.client.post(
                 "/treasury/launch",
                 json={
                     "synthetic_pks": [key.to_bytes().hex() for key in self.synthetic_public_keys],
-                    "implement_bundle": implement_bundle.to_json_dict(),
+                    "coin_name": byc_coin_name,
                     "fee_per_cost": self.fee_per_cost,
+                    "successor_launcher_id": None,
+                    "ignore_coin_names": [x.name().hex() for x in implement_bundle.removals()]
                 },
             )
             if response.is_error:
-                print(response.content)
-                response.raise_for_status()
-            bundle: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
-            sig_response = await self.sign_and_push(bundle)
+                raise ValueError(response.content)
+            bundle_dict: SpendBundle = SpendBundle.from_json_dict(response.json()["bundle"])
+            main_bundle = SpendBundle.aggregate([implement_bundle, bundle_dict])
+            sig_response = await self.sign_and_push(main_bundle)
             signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
             await self.wait_for_confirmation(signed_bundle)
             return sig_response
 
     ## Vaults ##
     async def upkeep_vaults_list(
-            self, coin_name=None, transferable_stability_fees=False, liquidatable=False, startable=False, restartable=False,
-            in_liquidation=False, biddable=False, in_bad_debt=False, seized=False, not_seized=False
+        self,
+        coin_name=None,
+        transferable_stability_fees=False,
+        liquidatable=False,
+        startable=False,
+        restartable=False,
+        in_liquidation=False,
+        biddable=False,
+        in_bad_debt=False,
+        seized=False,
+        not_seized=False,
     ):
         if not seized:
             if not not_seized:
                 seized = None
-            else: seized = False
-        else: seized = True
+            else:
+                seized = False
+        else:
+            seized = True
         if not transferable_stability_fees:
             transferable_stability_fees = None
         if not liquidatable:
@@ -1816,20 +1897,18 @@ class CircuitRPCClient:
         )
         return await self._process_transaction("/split_coin", payload)
 
-    async def wallet_split(
-        self, coin_name, amounts, target_puzzle_hashes=None, ignore_coin_names: list[str] = None
-    ):
+    async def wallet_split(self, coin_name, amounts, target_puzzle_hashes=None, ignore_coin_names: list[str] = None):
         """
         Split a coin into multiple coins.
-        
+
         This is a CLI wrapper for wallet_split_coin that converts XCH amounts to mojos.
-        
+
         Args:
             coin_name: Name of the coin to split
             amounts: List of amounts in XCH (floats)
             target_puzzle_hashes: Optional list of target puzzle hashes for the resulting coins
             ignore_coin_names: Optional list of coin names to ignore
-            
+
         Returns:
             dict: Transaction response after signing, pushing, and confirming
         """
@@ -1837,7 +1916,9 @@ class CircuitRPCClient:
         amounts_in_mojos = [self._convert_number(amount, "MOJOS") for amount in amounts]
         return await self.wallet_split_coin(coin_name, amounts_in_mojos, target_puzzle_hashes, ignore_coin_names)
 
-    async def offer_make(self, xch_amount: float, byc_amount: float, ignore_coin_names: list[str] = None, expires_in_seconds=600):
+    async def offer_make(
+        self, xch_amount: float, byc_amount: float, ignore_coin_names: list[str] = None, expires_in_seconds=600
+    ):
         """
         Create an offer to trade assets.
 
@@ -1942,7 +2023,6 @@ class CircuitRPCClient:
         response = await self._make_api_request("POST", "/bills", payload)
         return response
 
-
     async def bills_toggle(self, coin_name, info=False):
         """Toggle a CRT coin between plain and governance modes.
 
@@ -1978,7 +2058,9 @@ class CircuitRPCClient:
         if not coin_name:
             payload = self._build_base_payload(include_spent_coins=False, lapsed=True)
             data = await self._make_api_request("POST", "/bills", payload)
-            assert len(data) > 0, "No lapsed bills to reset found. To reset a non-lapsed bill, please specify the coin name"
+            assert (
+                len(data) > 0
+            ), "No lapsed bills to reset found. To reset a non-lapsed bill, please specify the coin name"
             coin_name = data[0]["name"]
 
         # Process as transaction
@@ -2004,18 +2086,28 @@ class CircuitRPCClient:
 
         # Verify Statutes
         if not force:
-            expected_statutes = statutes_full_output["full_implemented_statutes"] # TODO: account for pending proposals
+            expected_statutes = statutes_full_output["full_implemented_statutes"]  # TODO: account for pending proposals
             if not verify_statutes(
-                    statute_indices, expected_statutes, index, value,
-                    proposal_threshold, veto_interval, implementation_delay, max_delta
+                statute_indices,
+                expected_statutes,
+                index,
+                value,
+                proposal_threshold,
+                veto_interval,
+                implementation_delay,
+                max_delta,
             ):
                 raise ValueError("Statutes verification failed. To force proposal specify -f option")
 
         # Get coin name if not provided, pick a suitable governance coin
         if coin_name is None:
             statute_name = statute_indices[index][0]
-            threshold_amount_to_propose = statutes_full_output["full_implemented_statutes"][statute_name]["threshold_amount_to_propose"]
-            payload = self._build_base_payload(include_spent_coins=False, empty=True, min_amount=threshold_amount_to_propose+1)
+            threshold_amount_to_propose = statutes_full_output["full_implemented_statutes"][statute_name][
+                "threshold_amount_to_propose"
+            ]
+            payload = self._build_base_payload(
+                include_spent_coins=False, empty=True, min_amount=threshold_amount_to_propose + 1
+            )
             data = await self._make_api_request("POST", "/bills", payload)
             if not data:
                 raise ValueError("No governance coin with empty bill and amount in excess of proposal threshold found")

@@ -8,6 +8,7 @@ Provides two functions:
 
 These are extracted from inline definitions in circuit_rpc_cli.py to improve reuse and clarity.
 """
+
 from __future__ import annotations
 
 import sys
@@ -136,7 +137,11 @@ def make_text_progress_handler() -> Callable[[Dict[str, Any]], None]:
                 outcome = f"{colors['err']}FAILED{colors['reset']}" if colors["err"] else "FAILED"
                 check = f"{colors['err']}✖{colors['reset']}" if colors["err"] else "✖"
             total_col = f"{colors['dim']}{elapsed_str(st)}{colors['reset']}" if colors["dim"] else elapsed_str(st)
-            write_line(st, f"{check} Transaction {colors['bold']}{txid}{colors['reset']} {outcome} | total time: {total_col}", final=True)
+            write_line(
+                st,
+                f"{check} Transaction {colors['bold']}{txid}{colors['reset']} {outcome} | total time: {total_col}",
+                final=True,
+            )
             state.pop(key, None)
         elif event == "done":
             st["stopped"] = True
@@ -168,18 +173,64 @@ def make_text_progress_handler() -> Callable[[Dict[str, Any]], None]:
             code = ev.get("status_code")
             content = ev.get("content")
             total_col = f"{colors['dim']}{elapsed_str(st)}{colors['reset']}" if colors["dim"] else elapsed_str(st)
-            write_line(st, f"{colors['err']}Error{colors['reset']} while checking status (code {code}): {content} | elapsed: {total_col}", final=True)
+            write_line(
+                st,
+                f"{colors['err']}Error{colors['reset']} while checking status (code {code}): {content} | elapsed: {total_col}",
+                final=True,
+            )
             state.pop(key, None)
-        elif event in ("started", "status", "state_fetched", "bids_completed", "auctions_started", "bad_debts_recovered", "completed", "waiting", "rpc_request", "transaction_push", "transaction_starting", "transaction_completed", "transaction_failed", 
-                       "dexie_upload_started", "dexie_upload_request", "dexie_upload_success", "dexie_upload_failed",
-                       "offer_renewal_started", "offer_renewal_attempt", "offer_renewal_success", "offer_renewal_failed",
-                       "coin_splitting_skipped", "coin_splitting_started", "coin_splitting", "coin_split_success", "coin_split_failed", "coin_split_error", "coin_splitting_error",
-                       "liquidator_started", "keys_loaded", "warning", "error", "current_balance", "balance_check_failed",
-                       "offer_creation_started", "offer_creation_success", "offer_creation_partial_success", "offer_creation_failed", "offer_file_summary",
-                       "debt_recovery_plan", "debt_recovery_skipped", "debt_recovery_starting", "debt_recovery_completed", "debt_recovery_failed", "debt_recovery_summary"):
+        elif event in (
+            "started",
+            "status",
+            "state_fetched",
+            "bids_completed",
+            "auctions_started",
+            "bad_debts_recovered",
+            "completed",
+            "waiting",
+            "rpc_request",
+            "transaction_push",
+            "transaction_starting",
+            "transaction_completed",
+            "transaction_failed",
+            "dexie_upload_started",
+            "dexie_upload_request",
+            "dexie_upload_success",
+            "dexie_upload_failed",
+            "offer_renewal_started",
+            "offer_renewal_attempt",
+            "offer_renewal_success",
+            "offer_renewal_failed",
+            "coin_splitting_skipped",
+            "coin_splitting_started",
+            "coin_splitting",
+            "coin_split_success",
+            "coin_split_failed",
+            "coin_split_error",
+            "coin_splitting_error",
+            "liquidator_started",
+            "keys_loaded",
+            "warning",
+            "error",
+            "current_balance",
+            "balance_check_failed",
+            "offer_creation_started",
+            "offer_creation_success",
+            "offer_creation_partial_success",
+            "offer_creation_failed",
+            "offer_file_summary",
+            "debt_recovery_plan",
+            "debt_recovery_skipped",
+            "debt_recovery_starting",
+            "debt_recovery_completed",
+            "debt_recovery_failed",
+            "debt_recovery_summary",
+            "bid_decision",
+            "bid_calculation",
+        ):
             # Handle liquidator-specific events with user-friendly formatting
             message = ev.get("message", "")
-            
+
             if event == "started":
                 icon = f"{colors['info']}🚀{colors['reset']}" if colors["info"] else "🚀"
                 write_line(st, f"{icon} {message}", final=True)
@@ -206,7 +257,7 @@ def make_text_progress_handler() -> Callable[[Dict[str, Any]], None]:
                 write_line(st, f"{icon} {message}", final=True)
             elif event == "rpc_request":
                 endpoint = ev.get("endpoint", "")
-                icon = f"{colors['dim']}🌐{colors['reset']} " if colors["dim"] else "🌐"
+                icon = f"{colors['dim']}📡{colors['reset']} " if colors["dim"] else "📡"
                 write_line(st, f"{icon} {endpoint}", final=True)
             elif event == "transaction_push":
                 tx_type = ev.get("transaction_type", "")
@@ -320,6 +371,75 @@ def make_text_progress_handler() -> Callable[[Dict[str, Any]], None]:
             elif event == "debt_recovery_summary":
                 icon = f"{colors['info']}📊{colors['reset']}" if colors["info"] else "📊"
                 write_line(st, f"{icon} {message}", final=True)
+            # Bid decision and calculation events
+            elif event == "bid_decision":
+                decision = ev.get("decision", "")
+                reason = ev.get("reason", "")
+                vault_name = ev.get("vault_name", "")
+
+                # Build additional details
+                details = []
+                if "market_price" in ev:
+                    details.append(f"market={ev['market_price']:.3f}")
+                if "auction_price" in ev:
+                    details.append(f"auction={ev['auction_price']:.3f}")
+                if "discount" in ev:
+                    details.append(f"discount={ev['discount']:.2%}")
+                if "bid_amount" in ev:
+                    details.append(f"bid={ev['bid_amount']:.3f}")
+                if "xch_amount" in ev:
+                    details.append(f"xch={ev['xch_amount']:.3f}")
+
+                detail_str = f" [{', '.join(details)}]" if details else ""
+                vault_str = f" ({vault_name[:8]}...)" if vault_name else ""
+
+                if decision == "skip":
+                    icon = f"{colors['dim']}⏭️{colors['reset']}" if colors["dim"] else "⏭️"
+                    write_line(st, f"{icon} Skip bid{vault_str}: {reason}{detail_str}", final=True)
+                elif decision == "proceed":
+                    icon = f"{colors['ok']}💰{colors['reset']}" if colors["ok"] else "💰"
+                    write_line(st, f"{icon} Proceed with bid{vault_str}: {reason}{detail_str}", final=True)
+                elif decision == "favorable_market":
+                    icon = f"{colors['info']}📈{colors['reset']}" if colors["info"] else "📈"
+                    write_line(st, f"{icon} Favorable market{vault_str}: {reason}{detail_str}", final=True)
+                else:
+                    icon = f"{colors['info']}ℹ️{colors['reset']}" if colors["info"] else "ℹ️"
+                    write_line(st, f"{icon} Bid decision{vault_str}: {reason}{detail_str}", final=True)
+            elif event == "bid_calculation":
+                strategy = ev.get("strategy", "")
+                reason = ev.get("reason", "")
+                vault_name = ev.get("vault_name", "")
+
+                # Build additional details
+                details = []
+                if "bid_amount" in ev:
+                    details.append(f"bid={ev['bid_amount']:.3f}")
+                if "balance" in ev:
+                    details.append(f"balance={ev['balance']:.3f}")
+                if "min_required" in ev:
+                    details.append(f"min={ev['min_required']:.3f}")
+                if "debt" in ev:
+                    details.append(f"debt={ev['debt']:.3f}")
+                if "all_collateral_bid" in ev:
+                    details.append(f"all_col={ev['all_collateral_bid']:.3f}")
+                if "max_bid_limit" in ev:
+                    details.append(f"max={ev['max_bid_limit']:.3f}")
+                if "original_bid" in ev and "final_bid" in ev:
+                    details.append(f"adjusted={ev['original_bid']:.3f}→{ev['final_bid']:.3f}")
+
+                detail_str = f" [{', '.join(details)}]" if details else ""
+                vault_str = f" ({vault_name[:8]}...)" if vault_name else ""
+
+                if strategy in ("insufficient_balance", "max_bid_too_low"):
+                    icon = f"{colors['warn']}⚠️{colors['reset']}" if colors["warn"] else "⚠️"
+                    write_line(st, f"{icon} Bid calc{vault_str}: {reason}{detail_str}", final=True)
+                elif strategy == "final_bid":
+                    icon = f"{colors['ok']}✓{colors['reset']}" if colors["ok"] else "✓"
+                    write_line(st, f"{icon} Final bid{vault_str}: {reason}{detail_str}", final=True)
+                else:
+                    icon = f"{colors['info']}🧮{colors['reset']}" if colors["info"] else "🧮"
+                    strategy_str = f" [{strategy}]" if strategy else ""
+                    write_line(st, f"{icon} Bid calc{vault_str}{strategy_str}: {reason}{detail_str}", final=True)
         else:
             # Handle any unknown events with user-friendly formatting instead of raw JSON
             st["stopped"] = True
@@ -328,10 +448,42 @@ def make_text_progress_handler() -> Callable[[Dict[str, Any]], None]:
                     st["task"].cancel()
             except Exception:
                 pass
-            
-            # Format unknown events in a user-friendly way
+
+            # Format unknown events in a user-friendly way with additional data
             event_name = ev.get("event", "unknown")
             message = ev.get("message", f"Event: {event_name}")
+
+            # Build additional info from event data
+            extra_info = []
+            for key, value in ev.items():
+                if key not in ("event", "message", "done"):
+                    # Format values nicely
+                    if isinstance(value, float):
+                        if key in (
+                            "bid_amount",
+                            "xch_amount",
+                            "market_price",
+                            "auction_price",
+                            "balance",
+                            "min_required",
+                            "original_bid",
+                            "final_bid",
+                            "max_bid_limit",
+                            "debt",
+                            "all_collateral_bid",
+                        ):
+                            extra_info.append(f"{key}={value:.3f}")
+                        elif key in ("discount",):
+                            extra_info.append(f"{key}={value:.2%}")
+                        else:
+                            extra_info.append(f"{key}={value}")
+                    elif isinstance(value, (int, str, bool)):
+                        extra_info.append(f"{key}={value}")
+
+            # Append extra info if any
+            if extra_info:
+                message = f"{message} ({', '.join(extra_info)})"
+
             icon = f"{colors['info']}ℹ️{colors['reset']}" if colors["info"] else "ℹ️"
             write_line(st, f"{icon} {message}", final=True)
             state.pop(key, None)

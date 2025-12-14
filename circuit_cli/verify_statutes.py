@@ -101,8 +101,10 @@ def verify_statutes(
                 Program.fromhex(value)
             except Exception:
                 raise ValueError(
+
                     f"Invalid custom conditions announcement proposed. "
                     f"Custom conditions must be a hex string convertible to Program, got {value}"
+
                 )
         if index == 0:
             try:

@@ -79,10 +79,9 @@ async def fetch_dexie_market_depth(pay_asset: str = "XCH", receive_asset: str = 
                         # Extract market data
                         best_bid = float(ticker.get("bid") or 0) if ticker.get("bid") else 0
                         best_ask = float(ticker.get("ask") or 0) if ticker.get("ask") else 0
-                        last_price = float(ticker.get("last_price") or 0) if ticker.get("last_price") else 0
-
+                        last_price = float(ticker.get("last_price") or 0)
                         # Use last traded price as market reference; values are ratios (TBYC per XCH)
-                        relevant_price = 1 / last_price * MCAT
+                        relevant_price = 1 / best_ask
 
                         # Assume sufficient depth if we have a valid price ratio
                         has_sufficient_depth = relevant_price > 0
@@ -146,7 +145,7 @@ async def upload_offer_to_dexie(offer_data: dict, progress_handler=None):
 
     async with httpx.AsyncClient(timeout=30) as http_client:
         try:
-            resp = await http_client.post(url, json=offer_data, headers=headers)
+            resp = await http_client.post(url, json={"offer": offer.to_bech32()}, headers=headers)
             log.debug(f"Upload offer to Dexie response: {resp.status_code} {resp.content}")
             resp.raise_for_status()
             result = resp.json()
@@ -181,11 +180,12 @@ class LittleLiquidator:
         min_discount: float,
         min_profit_threshold: float = 0.02,  # Minimum 2% profit
         transaction_fee: float = 0.001,  # Estimated transaction fees
-        max_offer_amount: float = 1.0,  # Maximum XCH amount per offer
+        max_offer_amount: float = 5.0,  # Maximum XCH amount per offer
         offer_expiry_seconds: int = 600,  # 1 hour offer expiry
         current_time: float | None = None,  # testing: inject current time
         progress_handler=None,  # Progress handler for streaming updates
         min_collateral_to_keep: float = 2.0,  # Minimum XCH to keep before creating offers
+        disable_dexie_offers: bool = False,  # Disable creating or renewing offers to dexie
     ):
         self.rpc_client = rpc_client
         self.max_bid_milli_amount = max_bid_milli_amount
@@ -198,6 +198,7 @@ class LittleLiquidator:
         self._injected_current_time = current_time
         self.progress_handler = progress_handler
         self.min_collateral_to_keep = min_collateral_to_keep
+        self.disable_dexie_offers = disable_dexie_offers
 
     async def _emit_progress(self, event_data: dict):
         """Emit a progress event to the configured handler if set."""
@@ -330,6 +331,13 @@ class LittleLiquidator:
             if not expired_offers:
                 return 0
 
+            # If dexie offers are disabled, just clean up expired offers without renewing
+            if self.disable_dexie_offers:
+                log.info(f"Dexie offers disabled, removing {len(expired_offers)} expired offers from tracking")
+                for offer_id, _ in expired_offers:
+                    await self._remove_active_offer(offer_id)
+                return 0
+
             log.info(f"Found {len(expired_offers)} expired offers to renew")
             await self._emit_progress(
                 {
@@ -347,7 +355,7 @@ class LittleLiquidator:
                 try:
                     # Get the current market price ratio (TBYC/XCH) and convert to mTBYC/XCH price
                     market_price = await fetch_dexie_price("XCH", "TBYC")
-                    current_market_price = market_price * MCAT if market_price else 0
+                    current_market_price = market_price if market_price else 0
                     if not current_market_price or current_market_price <= 0:
                         # Fall back to last known market price from offer creation in offline/test envs
                         fallback_price = offer_data.get("market_price_at_creation")
@@ -357,7 +365,10 @@ class LittleLiquidator:
                             )
                             current_market_price = fallback_price
                         else:
-                            log.warning(f"Cannot renew offer {offer_id}: invalid market price {current_market_price}")
+                            log.warning(
+                                f"Cannot renew offer {offer_id}: invalid market price {current_market_price}, removing from tracking"
+                            )
+                            await self._remove_active_offer(offer_id)
                             continue
 
                     xch_amount = offer_data["xch_amount"]
@@ -371,27 +382,31 @@ class LittleLiquidator:
 
                     # Get initial balance to track consumption across renewals
                     ignore_coins = await self._get_ignore_coins()
-                    current_balances = await self.rpc_client.wallet_balances(ignore_coin_names=ignore_coins)
-                    remaining_balance_mojos = current_balances.get("xch", 0)
+                    available_coins = await self.rpc_client.wallet_coins(type="xch", ignore_coin_names=ignore_coins)
+                    log.debug(f"Available coins: {available_coins}")
+                    available_xch_coins = len([coin for coin in available_coins if coin["symbol"] == "XCH"])
+                    remaining_balance_mojos = sum(x["amount"] for x in available_coins if x["symbol"] == "XCH")
+
                     # Check if we have enough balance to renew this offer
                     xch_amount_mojos = int(xch_amount * MOJOS)
                     available_xch = remaining_balance_mojos / MOJOS
 
-                    if xch_amount_mojos > remaining_balance_mojos:
+                    if xch_amount_mojos > remaining_balance_mojos or available_xch_coins == 0:
                         log.warning(
                             f"Insufficient balance to renew offer {offer_id}: need {xch_amount:.6f} XCH, "
-                            f"only {available_xch:.6f} XCH available. Skipping renewal."
+                            f"only {available_xch:.6f} XCH available and {available_xch_coins} XCH coins available. Removing from tracking."
                         )
                         await self._emit_progress(
                             {
                                 "event": "offer_renewal_skipped",
-                                "message": f"Skipping renewal of offer {offer_id} - insufficient balance ({available_xch:.6f} XCH available, {xch_amount:.6f} XCH needed)",
+                                "message": f"Removing offer {offer_id} from tracking - insufficient balance ({available_xch:.6f} XCH available, {xch_amount:.6f} XCH needed)",
                                 "offer_id": offer_id,
                                 "renewal_number": renewal_count + 1,
                                 "xch_amount": xch_amount,
                                 "available_balance": available_xch,
                             }
                         )
+                        await self._remove_active_offer(offer_id)
                         continue
                     else:
                         log.info(
@@ -449,7 +464,27 @@ class LittleLiquidator:
                             }
                         )
                     else:
+                        error_msg = result.get("error", "Unknown error")
                         log.error(f"Failed to renew offer {offer_id}: {result}")
+
+                        # Check if the error is due to insufficient coins
+                        if "Can't find enough coins" in str(error_msg) or "Insufficient balance" in str(error_msg):
+                            log.warning("Stopping offer renewal due to insufficient coins")
+                            await self._emit_progress(
+                                {
+                                    "event": "offer_renewal_stopped",
+                                    "message": f"Stopping offer renewal - ran out of coins to use (failed on offer {offer_id})",
+                                    "offer_id": offer_id,
+                                    "error": error_msg,
+                                    "renewed_count": renewed_count,
+                                    "remaining_expired_offers": len(expired_offers)
+                                    - expired_offers.index((offer_id, offer_data))
+                                    - 1,
+                                }
+                            )
+                            # Stop processing remaining offers
+                            break
+
                         await self._emit_progress(
                             {
                                 "event": "offer_renewal_failed",
@@ -457,23 +492,14 @@ class LittleLiquidator:
                                 "offer_id": offer_id,
                                 "renewal_number": renewal_count + 1,
                                 "xch_amount": xch_amount,
-                                "error": result.get("error", "Unknown error"),
+                                "error": error_msg,
                             }
                         )
 
                 except Exception as e:
                     log.error(f"Error renewing offer {offer_id}: {e}")
-            assert len(expired_offers) == renewed_count, (
-                f"Expired offers count {len(expired_offers)} does not match renewed count {renewed_count}"
-            )
-            active_offers_count = 0
-            for offer_id, offer_data in (await self._get_active_offers()).items():
-                if await self._is_offer_expired(offer_data, current_time):
-                    raise Exception(f"Offer {offer_id} is still expired after renewal. ")
-                active_offers_count += 1
-            assert active_offers_count == len(active_offers), (
-                f"Active offers count {active_offers_count} does not match active offers count {len(active_offers)}"
-            )
+
+            log.info(f"Offer renewal completed: {renewed_count} of {len(expired_offers)} expired offers renewed")
             return renewed_count
 
         except Exception:
@@ -740,9 +766,9 @@ class LittleLiquidator:
                 {"event": "balance_check_failed", "message": f"Could not retrieve current balances: {e}"}
             )
 
-        await self._emit_progress({"event": "waiting", "message": "Waiting 30 seconds for next upkeep cycle"})
+        await self._emit_progress({"event": "waiting", "message": "Waiting 50 seconds for next upkeep cycle"})
         log.info("Waiting for next upkeep...")
-        await asyncio.sleep(30)
+        await asyncio.sleep(50)
 
     async def process_once(self):
         await self._emit_progress({"event": "started", "message": "Starting liquidation process"})
@@ -827,7 +853,6 @@ class LittleLiquidator:
             # Check for incomplete liquidations and restart them
             auctions_restarted = await self.check_and_restart_incomplete_liquidations(state)
             result["actions_taken"]["auctions_restarted"] = auctions_restarted
-            log.debug("State after restarts: %s", pformat(state))
             # either bid or start, but not both in the same iteration to avoid block size issues
             if state.get("vaults_in_liquidation"):
                 await self._emit_progress(
@@ -882,6 +907,9 @@ class LittleLiquidator:
             balances: Current wallet balances
             result: Result dictionary to update with offer creation info
         """
+        if self.disable_dexie_offers:
+            log.debug("Dexie offers disabled, skipping collateral offer creation")
+            return
         try:
             # Get current XCH balance
             xch_balance_mojos = balances.get("xch", 0)
@@ -1019,72 +1047,147 @@ class LittleLiquidator:
         statutes = await self.rpc_client.statutes_list(full=False)
         log.debug("Statutes: %s", pformat(statutes))
         min_bid_amount_bps = statutes["implemented_statutes"]["VAULT_AUCTION_MINIMUM_BID_BPS"]
-        min_bid_amount_flat = statutes["implemented_statutes"]["VAULT_AUCTION_MINIMUM_BID_FLAT"]
+        min_bid_amount_flat = statutes["implemented_statutes"]["VAULT_AUCTION_MINIMUM_BID_FLAT"] / MCAT
         for vault_in_liquidation in vaults_in_liquidation:
             vault_name = vault_in_liquidation["name"]
             vault_info = await self.rpc_client.upkeep_vaults_list(coin_name=vault_name, seized=True)
             if not vault_info:
                 log.warning("Failed to get vault info for %s", vault_name)
+                await self._emit_progress(
+                    {
+                        "event": "bid_decision",
+                        "decision": "skip",
+                        "reason": "Failed to get vault info",
+                        "vault_name": vault_name,
+                    }
+                )
                 continue
 
             log.debug("Vault info: %s", pformat(vault_info))
             auction_price_per_xch = vault_info.get("auction_price")
             if not auction_price_per_xch:
                 log.warning("Could not get auction_price from vault_info for %s", vault_name)
+                await self._emit_progress(
+                    {
+                        "event": "bid_decision",
+                        "decision": "skip",
+                        "reason": "No auction price available",
+                        "vault_name": vault_name,
+                    }
+                )
                 continue
 
             available_xch = vault_info.get("collateral")
             if not available_xch or available_xch < 1:
                 log.info(f"Not enough XCH to bid, skipping ({available_xch})")
+                await self._emit_progress(
+                    {
+                        "event": "bid_decision",
+                        "decision": "skip",
+                        "reason": f"Insufficient collateral ({available_xch} mojos)",
+                        "vault_name": vault_name,
+                    }
+                )
                 continue
 
             # Check market conditions and profitability using dexie price API
             market_check = await self.check_market_conditions(available_xch, auction_price_per_xch)
             if not market_check["profitable"]:
                 log.info(f"Market conditions unfavorable: {market_check['reason']}")
+                await self._emit_progress(
+                    {
+                        "event": "bid_decision",
+                        "decision": "skip",
+                        "reason": f"Market conditions unfavorable: {market_check['reason']}",
+                        "vault_name": vault_name,
+                        "market_price": market_check.get("market_price"),
+                        "auction_price": market_check.get("auction_price"),
+                        "discount": market_check.get("discount"),
+                    }
+                )
                 continue
 
             log.info(
                 f"Market conditions favorable - discount: {market_check['discount']:.2%}, "
-                f"market price: {market_check['market_price']}, auction price: {auction_price_per_xch}"
+                f"market price: {market_check['market_price']}, auction price: {auction_price_per_xch / PRICE_PRECISION}"
             )
-            mbyc_bid_amount = (
-                self.calculate_byc_bid_amount(current_balances, vault_info, min_bid_amount_bps, min_bid_amount_flat)
-                / MCAT
+            await self._emit_progress(
+                {
+                    "event": "bid_decision",
+                    "decision": "favorable_market",
+                    "reason": f"Market conditions favorable - discount: {market_check['discount']:.2%}",
+                    "vault_name": vault_name,
+                    "market_price": market_check.get("market_price"),
+                    "auction_price": auction_price_per_xch / PRICE_PRECISION,
+                    "discount": market_check.get("discount"),
+                }
+            )
+            mbyc_bid_amount = await self.calculate_byc_bid_amount(
+                current_balances, vault_info, min_bid_amount_bps, min_bid_amount_flat, vault_name
             )
             if mbyc_bid_amount < 0:
                 log.info("Insufficient balance to bid")
+                await self._emit_progress(
+                    {
+                        "event": "bid_decision",
+                        "decision": "skip",
+                        "reason": "Insufficient balance to meet auction requirements",
+                        "vault_name": vault_name,
+                    }
+                )
                 continue
 
             # Calculate bid amount
             xch_to_acquire = self.calculate_acquired_xch(mbyc_bid_amount, available_xch, auction_price_per_xch)
-            log.debug(f"XCH to acquire with BYC bid: {xch_to_acquire:.6f} with bid amount: {mbyc_bid_amount:.2f}")
-            # if bid amount is less than 1, then there's no need to bid
-            if mbyc_bid_amount < 1:
+            log.debug(f"XCH to acquire with BYC bid: {xch_to_acquire:.6f} with bid amount: {mbyc_bid_amount:.2f} mTBYC")
+            # if bid amount is less than 1 TBYC (1000 mTBYC), then there's no need to bid
+            if mbyc_bid_amount < 1000:
                 log.info("We don't have any byc left, skipping")
+                await self._emit_progress(
+                    {
+                        "event": "bid_decision",
+                        "decision": "skip",
+                        "reason": f"Bid amount too small ({mbyc_bid_amount / MCAT:.3f} TBYC < 1 TBYC)",
+                        "vault_name": vault_name,
+                    }
+                )
                 continue
 
             log.info(
-                f"Bidding {mbyc_bid_amount} TBYC for {xch_to_acquire / MOJOS} XCH at {auction_price_per_xch} TBYC/XCH"
+                f"Bidding {mbyc_bid_amount / MCAT} TBYC for {xch_to_acquire / MOJOS} XCH at {auction_price_per_xch / PRICE_PRECISION} TBYC/XCH"
+            )
+
+            # Emit decision to proceed with bid
+            await self._emit_progress(
+                {
+                    "event": "bid_decision",
+                    "decision": "proceed",
+                    "reason": f"Placing bid: {mbyc_bid_amount / MCAT:.2f} TBYC for {xch_to_acquire / MOJOS:.3f} XCH",
+                    "vault_name": vault_name,
+                    "bid_amount": mbyc_bid_amount / MCAT,
+                    "xch_amount": xch_to_acquire / MOJOS,
+                    "auction_price": auction_price_per_xch / PRICE_PRECISION,
+                }
             )
 
             try:
                 await self._emit_progress(
                     {
                         "event": "transaction_starting",
-                        "message": f"Placing bid on vault {vault_name} ({mbyc_bid_amount} TBYC for {xch_to_acquire / MOJOS:.3f} XCH)",
+                        "message": f"Placing bid on vault {vault_name} ({mbyc_bid_amount / MCAT} TBYC for {xch_to_acquire / MOJOS:.3f} XCH)",
                         "transaction_type": "vault_bid",
                         "vault_name": vault_name,
-                        "bid_amount": mbyc_bid_amount,
+                        "bid_amount": mbyc_bid_amount / MCAT,
                         "xch_amount": xch_to_acquire / MOJOS,
                     }
                 )
 
                 # Place the bid
+                # Convert mTBYC to TBYC for the API (API will convert back using _convert_number)
                 result = await self.rpc_client.upkeep_vaults_bid(
                     coin_name=vault_name,
-                    amount=mbyc_bid_amount,
-                    max_bid_price=auction_price_per_xch + 1,
+                    amount=mbyc_bid_amount / MCAT,
+                    max_bid_price=(auction_price_per_xch + 1) / PRICE_PRECISION,
                     ignore_coin_names=await self._get_ignore_coins(),
                 )
                 await self._emit_progress(
@@ -1108,38 +1211,42 @@ class LittleLiquidator:
                     "vault_name": vault_name,
                     "xch_acquired": xch_to_acquire / MOJOS,
                     "byc_paid": mbyc_bid_amount,
-                    "auction_price_per_xch": auction_price_per_xch,
+                    "auction_price_per_xch": auction_price_per_xch / PRICE_PRECISION,
                     "market_price_per_xch": market_check["market_price"],
                     "discount_percentage": market_check["discount"],
                     "estimated_profit_xch": (xch_to_acquire / MOJOS)
-                    * (market_check["market_price"] - auction_price_per_xch),
+                    * (market_check["market_price"] - auction_price_per_xch / PRICE_PRECISION),
                 }
                 log.info(f"TAX_EVENT: {json.dumps(tax_data)}")
 
                 # After a successful bid, create multiple offers based on max_offer_amount
                 # Pass the current XCH balance to prevent creating more offers than available
-                current_xch_balance = current_balances.get("xch", 0)
-                available_xch = current_xch_balance - self.min_collateral_to_keep
-                multiple_offers_result = await self.create_multiple_offers(
-                    xch_to_acquire, market_check["market_price"], collateral_balance_available=available_xch
-                )
-
-                if multiple_offers_result["total_success"] > 0:
-                    log.info(
-                        f"Successfully created {multiple_offers_result['total_success']} offers for {xch_to_acquire / MOJOS} XCH"
+                if not self.disable_dexie_offers:
+                    current_xch_balance = current_balances.get("xch", 0)
+                    available_xch = current_xch_balance - self.min_collateral_to_keep
+                    multiple_offers_result = await self.create_multiple_offers(
+                        xch_to_acquire, market_check["market_price"], collateral_balance_available=available_xch
                     )
-                    offers_created.extend(multiple_offers_result["successful_offers"])
 
-                    for offer_result in multiple_offers_result["successful_offers"]:
-                        if offer_result.get("dexie_id"):
-                            log.info(f"Offer uploaded to dexie.space with ID: {offer_result['dexie_id']}")
+                    if multiple_offers_result["total_success"] > 0:
+                        log.info(
+                            f"Successfully created {multiple_offers_result['total_success']} offers for {xch_to_acquire / MOJOS} XCH"
+                        )
+                        offers_created.extend(multiple_offers_result["successful_offers"])
 
-                    log.info("Total offers created: %s", len(offers_created))
-                    if multiple_offers_result["total_failed"] > 0:
-                        log.warning(f"{multiple_offers_result['total_failed']} offers failed to create")
-                    break
+                        for offer_result in multiple_offers_result["successful_offers"]:
+                            if offer_result.get("dexie_id"):
+                                log.info(f"Offer uploaded to dexie.space with ID: {offer_result['dexie_id']}")
+
+                        log.info("Total offers created: %s", len(offers_created))
+                        if multiple_offers_result["total_failed"] > 0:
+                            log.warning(f"{multiple_offers_result['total_failed']} offers failed to create")
+                        break
+                    else:
+                        log.error(f"Failed to create any offers for acquired XCH: {multiple_offers_result}")
                 else:
-                    log.error(f"Failed to create any offers for acquired XCH: {multiple_offers_result}")
+                    log.debug("Dexie offers disabled, skipping offer creation after bid")
+                    break
 
             except APIError as e:
                 log.error("Failed to bid on auction for vault %s: %s", vault_name, e)
@@ -1153,28 +1260,153 @@ class LittleLiquidator:
                 )
         return {"bids_placed": bids_placed, "offers_created": offers_created}
 
-    def calculate_byc_bid_amount(self, balances, vault_info, min_bid_amount_bps, min_bid_amount_flat):
+    async def calculate_byc_bid_amount(self, balances, vault_info, min_bid_amount_bps, min_bid_amount_flat, vault_name):
         # Support both possible keys used across code/tests
         byc_balance = balances.get("byc", balances.get("byc_balance", 0))
         # Determine required BYC to be able to bid up to max_bid_amount (in BYC units)
         vault_debt = vault_info["debt"] or 0
+        vault_collateral = vault_info.get("collateral", 0)
+        auction_price = vault_info.get("auction_price", 0)
+
         # calculate minimum bid required by calculating relative and taking max out of it relative or flat
         log.debug(
             f"Vault debt: {vault_debt} | min_bid_amount_bps: {min_bid_amount_bps} | min_bid_amount_flat: {min_bid_amount_flat}"
         )
         min_relative_bid_amount = (vault_debt * min_bid_amount_bps) / PRECISION_BPS
         log.debug(f"Picking bid amount from values: {min_relative_bid_amount} {min_bid_amount_flat}")
-        required = max(min_relative_bid_amount, min_bid_amount_flat)
-        log.info(f"My TBYC balance: {byc_balance} | Required to bid up to max: {required}")
-        if byc_balance < required:
-            log.info("Not enough TBYC to bid up to max amount, skipping")
-            return -1
-        if self.max_bid_milli_amount:
-            if self.max_bid_milli_amount < required:
-                raise ValueError(f"Max bid amount is too low: {self.max_bid_milli_amount} < {required}")
-            return min(byc_balance, self.max_bid_milli_amount, vault_debt)
+        min_bid_required = max(min_relative_bid_amount, min_bid_amount_flat)
+
+        # Calculate bid needed to take all collateral
+        # collateral is in mojos, auction_price is in (mTBYC * 100) per XCH
+        # So: bid_for_all_collateral = (collateral_mojos / MOJOS) * (auction_price / 100) * MCAT
+        # Result is in mTBYC (milli-units) to match other bid amounts
+        bid_for_all_collateral = 0
+        if vault_collateral > 0 and auction_price > 0:
+            bid_for_all_collateral = (vault_collateral / MOJOS) * (auction_price / PRICE_PRECISION) * MCAT
+
+        log.info(
+            f"My TBYC balance: {byc_balance / MCAT:.2f} | Min bid required: {min_bid_required / MCAT:.2f} | "
+            f"Debt: {vault_debt / MCAT:.2f} | Bid for all collateral: {bid_for_all_collateral / MCAT:.2f}"
+        )
+
+        # Auction requirements: bid must either:
+        # 1. Exceed min_bid_required, OR
+        # 2. Pay off all debt (vault_debt), OR
+        # 3. Take all collateral (bid_for_all_collateral)
+
+        # Choose the bid amount based on available balance and requirements
+        if byc_balance >= bid_for_all_collateral:
+            # We can take all collateral - this satisfies requirement #3
+            desired_bid = bid_for_all_collateral
+            strategy = "take_all_collateral"
+            await self._emit_progress(
+                {
+                    "event": "bid_calculation",
+                    "strategy": strategy,
+                    "reason": f"Balance sufficient to take all collateral ({byc_balance / MCAT:.2f} >= {bid_for_all_collateral / MCAT:.2f} TBYC)",
+                    "vault_name": vault_name,
+                    "bid_amount": desired_bid / MCAT,
+                    "balance": byc_balance / MCAT,
+                }
+            )
+        elif byc_balance >= vault_debt:
+            # We can pay off all debt - this satisfies requirement #2
+            desired_bid = vault_debt
+            strategy = "pay_off_debt"
+            await self._emit_progress(
+                {
+                    "event": "bid_calculation",
+                    "strategy": strategy,
+                    "reason": f"Balance sufficient to pay off all debt ({byc_balance / MCAT:.2f} >= {vault_debt / MCAT:.2f} TBYC)",
+                    "vault_name": vault_name,
+                    "bid_amount": desired_bid / MCAT,
+                    "balance": byc_balance / MCAT,
+                }
+            )
+        elif byc_balance >= min_bid_required:
+            # We can meet minimum bid - this satisfies requirement #1
+            desired_bid = min_bid_required
+            strategy = "meet_minimum"
+            await self._emit_progress(
+                {
+                    "event": "bid_calculation",
+                    "strategy": strategy,
+                    "reason": f"Balance sufficient to meet minimum bid ({byc_balance / MCAT:.2f} >= {min_bid_required / MCAT:.2f} TBYC)",
+                    "vault_name": vault_name,
+                    "bid_amount": desired_bid / MCAT,
+                    "balance": byc_balance / MCAT,
+                }
+            )
         else:
-            return min(byc_balance, vault_debt)
+            # We don't have enough to meet any requirement
+            log.info(f"Not enough TBYC to meet auction requirements. Need at least {min_bid_required / MCAT:.2f}")
+            await self._emit_progress(
+                {
+                    "event": "bid_calculation",
+                    "strategy": "insufficient_balance",
+                    "reason": f"Balance insufficient ({byc_balance / MCAT:.2f} < {min_bid_required / MCAT:.2f} TBYC minimum)",
+                    "vault_name": vault_name,
+                    "balance": byc_balance / MCAT,
+                    "min_required": min_bid_required / MCAT,
+                }
+            )
+            return -1
+
+        # Apply max_bid_milli_amount limit if set
+        if self.max_bid_milli_amount:
+            # Ensure max_bid can meet at least one requirement
+            if (
+                self.max_bid_milli_amount < min_bid_required
+                and self.max_bid_milli_amount < vault_debt
+                and self.max_bid_milli_amount < bid_for_all_collateral
+            ):
+                log.warning(
+                    f"Max bid amount {self.max_bid_milli_amount / MCAT:.2f} is too low to meet any auction requirement. "
+                    f"Min bid: {min_bid_required / MCAT:.2f}, Debt: {vault_debt / MCAT:.2f}, All collateral: {bid_for_all_collateral / MCAT:.2f}"
+                )
+                await self._emit_progress(
+                    {
+                        "event": "bid_calculation",
+                        "strategy": "max_bid_too_low",
+                        "reason": f"Max bid limit ({self.max_bid_milli_amount / MCAT:.2f} TBYC) too low to meet any requirement",
+                        "vault_name": vault_name,
+                        "max_bid_limit": self.max_bid_milli_amount / MCAT,
+                        "min_required": min_bid_required / MCAT,
+                        "debt": vault_debt / MCAT,
+                        "all_collateral_bid": bid_for_all_collateral / MCAT,
+                    }
+                )
+                return -1
+
+            # Check if max_bid limit constrains our desired bid
+            original_desired_bid = desired_bid
+            desired_bid = min(byc_balance, self.max_bid_milli_amount, desired_bid)
+            if desired_bid < original_desired_bid:
+                await self._emit_progress(
+                    {
+                        "event": "bid_calculation",
+                        "strategy": "max_bid_applied",
+                        "reason": f"Max bid limit applied, reducing bid from {original_desired_bid / MCAT:.2f} to {desired_bid / MCAT:.2f} TBYC",
+                        "vault_name": vault_name,
+                        "original_bid": original_desired_bid / MCAT,
+                        "final_bid": desired_bid / MCAT,
+                        "max_bid_limit": self.max_bid_milli_amount / MCAT,
+                    }
+                )
+        else:
+            desired_bid = min(byc_balance, desired_bid)
+
+        log.info(f"Final bid amount: {desired_bid / MCAT:.2f}")
+        await self._emit_progress(
+            {
+                "event": "bid_calculation",
+                "strategy": "final_bid",
+                "reason": f"Final calculated bid amount: {desired_bid / MCAT:.2f} TBYC",
+                "vault_name": vault_name,
+                "bid_amount": desired_bid / MCAT,
+            }
+        )
+        return desired_bid
 
     def calculate_acquired_xch(self, byc_bid_amount, available_xch, bid_price_per_xch):
         log.debug(f"Calculating xch to acquire with params: {self.max_bid_milli_amount}, {bid_price_per_xch}")
@@ -1200,17 +1432,18 @@ class LittleLiquidator:
         # If price API fails or returns 0, assume favorable test conditions
         if not market_price:
             log.info("TBYC price unavailable, testing liquidator assumes market conditions are favorable")
+            auction_price_byc = auction_price_per_xch / PRICE_PRECISION
             return {
                 "profitable": True,
                 "discount": self.min_discount + 0.01,  # Slightly above minimum
-                "market_price": auction_price_per_xch * 1.1,  # 10% above auction price
-                "auction_price": auction_price_per_xch,
+                "market_price": auction_price_byc * 1.1,  # 10% above auction price
+                "auction_price": auction_price_byc,
                 "has_sufficient_depth": True,
                 "reason": "API unavailable - testing mode",
             }
 
         # Convert market_price_ratio (TBYC/XCH) to market price (mTBYC/XCH) for comparison
-        market_price_byc = market_price * MCAT
+        market_price_byc = market_price
         auction_price_byc = auction_price_per_xch / PRICE_PRECISION
         # Calculate discount from market price
         discount = (market_price_byc - auction_price_byc) / market_price_byc if market_price_byc > 0 else 0
@@ -1228,9 +1461,11 @@ class LittleLiquidator:
             "market_price": market_price_byc,
             "auction_price": auction_price_byc,
             "has_sufficient_depth": True,
-            "reason": "Sufficient discount and liquidity"
-            if profitable
-            else f"Discount {discount:.2%} < required {self.min_discount:.2%}",
+            "reason": (
+                "Sufficient discount and liquidity"
+                if profitable
+                else f"Discount {discount:.2%} < required {self.min_discount:.2%}"
+            ),
         }
 
     async def create_multiple_offers(self, total_xch_amount, market_price, collateral_balance_available=None):
@@ -1330,10 +1565,15 @@ class LittleLiquidator:
                         f"Successfully created offer {i + 1}: {xch_amount / MOJOS:.6f} XCH (remaining balance: {remaining_balance / MOJOS:.6f} XCH)"
                     )
                 else:
-                    failed_offers.append(
-                        {"xch_amount": xch_amount / MOJOS, "error": offer_result.get("error", "Unknown error")}
-                    )
+                    error_msg = offer_result.get("error", "Unknown error")
+                    failed_offers.append({"xch_amount": xch_amount / MOJOS, "error": error_msg})
                     log.error(f"Failed to create offer {i + 1}: {offer_result}")
+
+                    # Check if the error is due to insufficient coins
+                    if "Can't find enough coins" in str(error_msg) or "Insufficient balance" in str(error_msg):
+                        log.warning("Stopping offer creation due to insufficient coins")
+                        # Stop processing remaining offers
+                        break
 
             except Exception as e:
                 failed_offers.append({"xch_amount": xch_amount / MOJOS, "error": str(e)})

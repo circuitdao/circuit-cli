@@ -47,7 +47,7 @@ Main command groups:
 
 Use 'circuit-cli <command> -h' for detailed help on any command.
         """,
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
@@ -139,6 +139,13 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         default=2.0,
         help="Minimum XCH collateral to keep before creating offers to convert excess to BYC (default: 2.0)",
     )
+    upkeep_little_liquidator_parser.add_argument(
+        "--disable-dexie-offers",
+        "-ddo",
+        action="store_true",
+        default=False,
+        help="Disable creating or renewing offers to dexie (only bid on auctions and do other vault operations)",
+    )
 
     ## protocol info ##
     upkeep_invariants_subparser = upkeep_subparsers.add_parser(
@@ -184,11 +191,7 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         description="Lists approved announcers. If coin_name is specified, info for only this announcer will be shown, whether approved or not.",
     )
     upkeep_announcers_list_parser.add_argument(
-        "coin_name",
-        nargs="?",
-        type=str,
-        default=None,
-        help="[optional] Name or launcher ID of announcer coin"
+        "coin_name", nargs="?", type=str, default=None, help="[optional] Name or launcher ID of announcer coin"
     )
     upkeep_announcers_list_parser.add_argument(
         "-v", "--valid", action="store_true", help="List valid announcers only (approved and not expired)"
@@ -347,7 +350,10 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         "reward", help="Distribute CRT Rewards", description="Distributes CRT Rewards to registered Announcers."
     )
     upkeep_registry_reward_parser.add_argument(
-        "-t", "--target-puzzle-hash", metavar="PUZZLE_HASH", type=str,
+        "-t",
+        "--target-puzzle-hash",
+        metavar="PUZZLE_HASH",
+        type=str,
         help="Puzzle hash to which excess CRT Rewards not allocated to any announcer will be be paid. Default is first synthetic derived key",
     )
     upkeep_registry_reward_parser.add_argument(
@@ -413,7 +419,9 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         help="Puzzle hash to which CRT is issued if bid wins auction. Default is puzzle hash of funding coin selected by driver",
     )
     upkeep_recharge_bid_parser.add_argument(
-        "-i", "--info", action="store_true",
+        "-i",
+        "--info",
+        action="store_true",
         help="Show info on a potential bid. If no intended BYC bid amount is specified, the minimum admissible amount is assumed",
     )
     # settle
@@ -444,7 +452,11 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         "amount", nargs="?", type=float, default=None, help="Amount of CRT to bid. Optional when -i option is set"
     )
     upkeep_surplus_bid_parser.add_argument(
-        "-t", "--target-puzzle-hash", metavar="PUZZLE_HASH", type=str, default=None,
+        "-t",
+        "--target-puzzle-hash",
+        metavar="PUZZLE_HASH",
+        type=str,
+        default=None,
         help="Puzzle hash to which BYC is sent if bid wins auction. Default is puzzle hash of funding coin selected by driver.",
     )
     upkeep_surplus_bid_parser.add_argument("-i", "--info", action="store_true", help="Show info on a potential bid")
@@ -496,6 +508,19 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         default=None,
         help="Implement previously proposed bill to launch treasury coin",
     )
+    upkeep_treasury_launch_parser.add_argument(
+        "-y",
+        "--byc-coin-name",
+        type=str,
+        default=None,
+        help="BYC coin name or label (use <label> syntax) to use when implementing treasury launch bill",
+    )
+    upkeep_treasury_launch_parser.add_argument(
+        "-l",
+        "--label",
+        type=str,
+        help="Tag this coin with a label that can be used to identify it in other operations",
+    )
 
     ## vaults ##
     upkeep_vaults_parser = upkeep_subparsers.add_parser(
@@ -508,44 +533,62 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         "list", help="List all vaults", description="Shows information on all collateral vaults."
     )
     upkeep_vaults_list_parser.add_argument(
-        "coin_name", nargs="?", type=str, default=None,
+        "coin_name",
+        nargs="?",
+        type=str,
+        default=None,
         help="[optional] Name of vault coin. If specified, info for only this vault is shown",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-t", "--transferable-stability-fees", action="store_true",
+        "-t",
+        "--transferable-stability-fees",
+        action="store_true",
         help="List vaults from which Stability Fees can be transferred to Treasury",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-l", "--liquidatable", action="store_true",
+        "-l",
+        "--liquidatable",
+        action="store_true",
         help="List vaults on which a liquidation auction can be started (for first time or restart)",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-s", "--startable", action="store_true",
+        "-s",
+        "--startable",
+        action="store_true",
         help="List vaults on which a liquidation auction can be started for first time",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-r", "--restartable", action="store_true",
+        "-r",
+        "--restartable",
+        action="store_true",
         help="List vaults on which a liquidation auction can be restarted",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-il", "--in-liquidation", action="store_true",
+        "-il",
+        "--in-liquidation",
+        action="store_true",
         help="List vaults in liquidation",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-b", "--biddable", action="store_true",
+        "-b",
+        "--biddable",
+        action="store_true",
         help="List vaults that currently accept bids in a liquidation auction",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-bd", "--in-bad-debt", action="store_true",
+        "-bd",
+        "--in-bad-debt",
+        action="store_true",
         help="List vaults in bad debt",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-z", "--seized", action="store_true",
+        "-z",
+        "--seized",
+        action="store_true",
         help="List seized vaults (seized = in liquidation or bad debt)",
     )
     upkeep_vaults_list_parser.add_argument(
-        "-nz", "--not-seized", action="store_true",
-        help="List vaults that have not been seized"
+        "-nz", "--not-seized", action="store_true", help="List vaults that have not been seized"
     )
 
     # LATER: add -o/--ordered arg to order by outstanding SFs
@@ -557,18 +600,26 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         description="Transfers stability fees from specified collateral vault to treasury.",
     )
     upkeep_vaults_transfer_parser.add_argument(
-        "coin_name", nargs="?", type=str, default=None,
+        "coin_name",
+        nargs="?",
+        type=str,
+        default=None,
         help="[optional] Name of vault coin. If not specified, vault with greatest amount of SFs to transfer is selected",
     )
 
     # liquidate #
     upkeep_vaults_liquidate_parser = upkeep_vaults_subparsers.add_parser(
-        "liquidate", help="Start a liquidation auction",
-        description="Starts a liquidation auction. This can either be for first time or a restart."
+        "liquidate",
+        help="Start a liquidation auction",
+        description="Starts a liquidation auction. This can either be for first time or a restart.",
     )
     upkeep_vaults_liquidate_parser.add_argument("coin_name", type=str, help="Name of vault to liquidate")
     upkeep_vaults_liquidate_parser.add_argument(
-        "-t", "--target-puzzle-hash", metavar="PUZZLE_HASH", type=str, default=None,
+        "-t",
+        "--target-puzzle-hash",
+        metavar="PUZZLE_HASH",
+        type=str,
+        default=None,
         help="Puzzle hash to pay initiator incentive to. Default is users's first synthetic derived key's puzzle hash",
     )
 
@@ -615,22 +666,34 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         "-x", "--exitable", action="store_true", default=None, help="Governance coins that can be exited"
     )
     bills_list_parser.add_argument(
-        "-e", "--empty", action="store_true", default=None,
+        "-e",
+        "--empty",
+        action="store_true",
+        default=None,
         help="Empty governance coins, ie those with bill equal to nil",
     )
     bills_list_parser.add_argument(
-        "-n", "--non-empty", action="store_true", default=None,
+        "-n",
+        "--non-empty",
+        action="store_true",
+        default=None,
         help="Non-empty governance coins, ie those with bill not equal to nil",
     )
     bills_list_parser.add_argument(
         "-v", "--vetoable", action="store_true", default=None, help="Governance coins with vetoable bill"
     )
     bills_list_parser.add_argument(
-        "-c", "--enacted", action="store_true", default=None,
+        "-c",
+        "--enacted",
+        action="store_true",
+        default=None,
         help="Governance coins with enacted bill (enacted = no longer vetoable, incl lapsed)",
     )
     bills_list_parser.add_argument(
-        "-d", "--in-implementation-delay", default=None, action="store_true",
+        "-d",
+        "--in-implementation-delay",
+        default=None,
+        action="store_true",
         help="Governance coins with bill in implementation delay",
     )
     bills_list_parser.add_argument(
@@ -643,7 +706,9 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         "-s", "--statute-index", type=str, default=None, help="Governance coins with bill to change specified statute"
     )
     bills_list_parser.add_argument(
-        "-b", "--bill", type=str,
+        "-b",
+        "--bill",
+        type=str,
         help="Governance coins with specified bill (excl proposal times). Must be program in hex format",
     )
     bills_list_parser.add_argument(
@@ -664,25 +729,33 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
     bills_propose_parser = bills_subparsers.add_parser("propose", help="Propose a new bill")
     bills_propose_parser.add_argument("index", type=str, help="Statute index or name. Specify -1 for custom conditions")
     bills_propose_parser.add_argument(
-        "value", nargs="?", default=None, type=str,
+        "value",
+        nargs="?",
+        default=None,
+        type=str,
         help=(
             "Value of bill, ie Statute value or custom announcements. Omit to keep current value. "
             "Must be a Program in hex format if INDEX = -1, a 32-byte hex string if INDEX = 0, and an integer otherwise"
         ),
     )
     bills_propose_parser.add_argument(
-        "-n", "--coin-name", default=None, type=str,
+        "-n",
+        "--coin-name",
+        default=None,
+        type=str,
         help="Governance coin to use for proposal. If not specified, a suitable coin is chosen automatically",
     )
     bills_propose_parser.add_argument(
         "-f", "--force", action="store_true", help="Propose bill even if resulting Statutes are not consistent"
     )
     bills_propose_parser.add_argument(
-        "-p", "--proposal-threshold", default=None, type=int, help="Min amount of CRT required to propose new Statute value"
+        "-p",
+        "--proposal-threshold",
+        default=None,
+        type=int,
+        help="Min amount of CRT required to propose new Statute value",
     )
-    bills_propose_parser.add_argument(
-        "-v", "--veto-interval", type=int, default=None, help="Veto period in seconds"
-    )
+    bills_propose_parser.add_argument("-v", "--veto-interval", type=int, default=None, help="Veto period in seconds")
     bills_propose_parser.add_argument(
         "-d", "--implementation-delay", type=int, default=None, help="Implementation delay in seconds"
     )
@@ -698,15 +771,24 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         "implement", help="Implement a bill into statute", description="Implement a bill."
     )
     bills_implement_subparser.add_argument(
-        "coin_name", nargs="?", default=None, type=str,
-        help="[optional] Coin name of bill to implement. Default is to implement bill that has been implementable longest"
+        "coin_name",
+        nargs="?",
+        default=None,
+        type=str,
+        help="[optional] Coin name of bill to implement. Default is to implement bill that has been implementable longest",
     )
 
     ## reset ##
     bills_reset_subparser = bills_subparsers.add_parser(
         "reset", help="Reset a bill", description="Sets bill of a governance coin to nil."
     )
-    bills_reset_subparser.add_argument("coin_name", nargs="?", type=str, default=None, help="[optional] Coin name. By default a coin with a lapsed bill is chosen")
+    bills_reset_subparser.add_argument(
+        "coin_name",
+        nargs="?",
+        type=str,
+        default=None,
+        help="[optional] Coin name. By default a coin with a lapsed bill is chosen",
+    )
 
     ### WALLET ###
     wallet_parser = subparsers.add_parser("wallet", help="Wallet commands")
@@ -714,21 +796,28 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
 
     ## addresses ##
     wallet_addresses_parser = wallet_subparsers.add_parser(
-        "addresses", help="Get wallet addresses",
+        "addresses",
+        help="Get wallet addresses",
         description="Shows wallet addresses and puzzle hashes.",
     )
     wallet_addresses_parser.add_argument(
-        "-i", "--derivation-index", type=int, default=5,
+        "-i",
+        "--derivation-index",
+        type=int,
+        default=5,
         help="Derivation index up to which to show wallet addresses. Default: 5",
     )
     wallet_addresses_parser.add_argument(
-        "-p", "--puzzle_hashes", action="store_true",
+        "-p",
+        "--puzzle_hashes",
+        action="store_true",
         help="Also show puzzle hashes",
     )
 
     ## balances ##
     wallet_balances_parser = wallet_subparsers.add_parser(
-        "balances", help="Get wallet balances",
+        "balances",
+        help="Get wallet balances",
         description="Show wallet balances for XCH, BYC, and CRT coins not in governance mode.",
     )
 
@@ -741,10 +830,13 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
 Show information on individual coins in wallet.
 
 By default, only CRT coins not in governance mode are returned.
-"""
+""",
     )
     wallet_coins_parser.add_argument(
-        "-t", "--type", type=str.lower, choices=["xch", "byc", "crt", "all", "gov", "empty", "bill"],
+        "-t",
+        "--type",
+        type=str.lower,
+        choices=["xch", "byc", "crt", "all", "gov", "empty", "bill"],
         help="Return coins of given type only",
     )
 
@@ -759,7 +851,8 @@ By default, only CRT coins not in governance mode are returned.
 
     ## take-offer ##
     wallet_take_offer_parser = wallet_subparsers.add_parser(
-        "take-offer", help="Take an offer",
+        "take-offer",
+        help="Take an offer",
         description="Take an existing Chia offer.",
     )
     wallet_take_offer_parser.add_argument("offer_bech32", type=str, help="The offer in bech32 format to take")
@@ -778,21 +871,21 @@ Multiple amounts can be provided as space-separated values.
 Example:
   circuit-cli wallet split <coin_name> 1.0 0.5 0.25
   This splits the coin into three new coins of 1.0, 0.5, and 0.25 XCH.
-"""
+""",
     )
     wallet_split_parser.add_argument("coin_name", type=str, help="Name of the coin to split")
     wallet_split_parser.add_argument(
         "amounts",
         type=float,
         nargs="+",
-        help="Amounts in XCH for the resulting coins (space-separated). A change coin is automatically generated"
+        help="Amounts in XCH for the resulting coins (space-separated). A change coin is automatically generated",
     )
     wallet_split_parser.add_argument(
         "--target-puzzle-hashes",
         type=str,
         nargs="+",
         default=None,
-        help="[optional] Target puzzle hashes for the resulting coins (space-separated, must match number of amounts)"
+        help="[optional] Target puzzle hashes for the resulting coins (space-separated, must match number of amounts)",
     )
 
     ### ANNOUNCER ###
@@ -837,16 +930,21 @@ Example:
 
     ## update price ##
     announcer_update_parser = announcer_subparsers.add_parser(
-        "update", help="Update announcer price",
+        "update",
+        help="Update announcer price",
         description="Updates the announcer price. The puzzle automatically updates the expiry timestamp.",
     )
     announcer_update_parser.add_argument("price", type=float, help="New announcer price in USD per XCH")
     announcer_update_parser.add_argument(
-        "coin_name", nargs="?", type=str, default=None,
+        "coin_name",
+        nargs="?",
+        type=str,
+        default=None,
         help="[optional] Announcer coin name. Only required if user owns more than one announcer",
     )
     announcer_update_parser.add_argument(
-        "--fee-coin", action="store_true",
+        "--fee-coin",
+        action="store_true",
         help="Use a fee coin instead of announcer deposit to pay for transaction fees",
     )
 
@@ -855,7 +953,10 @@ Example:
         "configure", help="Configure the announcer", description="Configures the announcer."
     )
     announcer_configure_parser.add_argument(
-        "coin_name", nargs="?", type=str, default=None,
+        "coin_name",
+        nargs="?",
+        type=str,
+        default=None,
         help="[optional] Announcer coin name. Only required if user owns more than one announcer",
     )
     announcer_configure_parser.add_argument(
@@ -865,7 +966,8 @@ Example:
     announcer_configure_parser.add_argument("--min-deposit", type=float, help="New minimum deposit amount in XCH")
     announcer_configure_parser.add_argument("--inner-puzzle-hash", type=str, help="New inner puzzle hash (re-key)")
     announcer_configure_parser.add_argument(
-        "--price", type=float,
+        "--price",
+        type=float,
         help="New announcer price in USD per XCH. If only updating price, it's more efficient to use 'update' operation",
     )
     announcer_configure_parser.add_argument("--ttl", type=int, help="New price time to live in seconds")
@@ -876,25 +978,36 @@ Example:
 
     ## register ##
     announcer_register_parser = announcer_subparsers.add_parser(
-        "register", help="Register an Announcer",
+        "register",
+        help="Register an Announcer",
         description="Registers an Announcer with Announcer Registry to be eligible for CRT Rewards.",
     )
     announcer_register_parser.add_argument(
-        "coin_name", nargs="?", type=str, default=None,
+        "coin_name",
+        nargs="?",
+        type=str,
+        default=None,
         help="[optional] Announcer coin name. Only required if user owns more than one announcer",
     )
     announcer_register_parser.add_argument(
-        "-t", "--target-puzzle-hash", metavar="PUZZLE_HASH", type=str,
+        "-t",
+        "--target-puzzle-hash",
+        metavar="PUZZLE_HASH",
+        type=str,
         help="Inner puzzle hash to which CRT Rewards are paid. Default is announcer inner puzzle hash",
     )
 
     ## exit ##
     announcer_exit_parser = announcer_subparsers.add_parser(
-        "exit", help="Exit announcer layer",
+        "exit",
+        help="Exit announcer layer",
         description="Exit announcer layer by melting announcer into plain XCH coin.",
     )
     announcer_exit_parser.add_argument(
-        "coin_name", nargs="?", type=str, default=None,
+        "coin_name",
+        nargs="?",
+        type=str,
+        default=None,
         help="[optional] Announcer coin name. Only required if user owns more than one announcer",
     )
 
@@ -921,8 +1034,7 @@ Example:
 
     ## list ##
     statutes_list_subparser = statutes_subparsers.add_parser(
-        "list", help="List Statutes",
-        description="Lists all Statutes."
+        "list", help="List Statutes", description="Lists all Statutes."
     )
     statutes_list_subparser.add_argument(
         "-f", "--full", action="store_true", help="Show Statutes incl constraints and additional info"
@@ -930,45 +1042,64 @@ Example:
 
     ## update price ##
     statutes_update_subparser = statutes_subparsers.add_parser(
-        "update", help="Update Statutes Price",
-        description="Updates Statutes Price Info to most recently matured Oracle Price Info."
+        "update",
+        help="Update Statutes Price",
+        description="Updates Statutes Price Info to most recently matured Oracle Price Info.",
     )
     statutes_update_subparser.add_argument(
         "-i", "--info", action="store_true", help="Show info on when Statues can be updated next"
     )
 
     ## announce ##
-    statutes_announce_subparser = statutes_subparsers.add_parser("announce", help="Announce Statutes", description="Announces Statutes.")
+    statutes_announce_subparser = statutes_subparsers.add_parser(
+        "announce", help="Announce Statutes", description="Announces Statutes."
+    )
 
     ### COLLATERAL VAULT ###
-    vault_parser = subparsers.add_parser("vault", help="Manage a collateral vault", description="Manages a collateral vault.")
+    vault_parser = subparsers.add_parser(
+        "vault", help="Manage a collateral vault", description="Manages a collateral vault."
+    )
     vault_subparsers = vault_parser.add_subparsers(dest="action")
 
     ## show ##
-    vault_show_parser = vault_subparsers.add_parser("show", help="Show vault", description="Shows information on collateral vault.")
+    vault_show_parser = vault_subparsers.add_parser(
+        "show", help="Show vault", description="Shows information on collateral vault."
+    )
 
     ## deposit ##
-    vault_deposit_subparser = vault_subparsers.add_parser("deposit", help="Deposit to vault", description="Deposits XCH to collateral vault.")
+    vault_deposit_subparser = vault_subparsers.add_parser(
+        "deposit", help="Deposit to vault", description="Deposits XCH to collateral vault."
+    )
     vault_deposit_subparser.add_argument("amount", type=float, help="Amount of XCH to deposit")
 
     ## withdraw ##
-    vault_withdraw_subparser = vault_subparsers.add_parser("withdraw", help="Withdraw from vault", description="Withdraws XCH from collateral vault.")
+    vault_withdraw_subparser = vault_subparsers.add_parser(
+        "withdraw", help="Withdraw from vault", description="Withdraws XCH from collateral vault."
+    )
     vault_withdraw_subparser.add_argument("amount", type=float, help="Amount of XCH to withdraw")
 
     ## borrow ##
-    vault_borrow_subparser = vault_subparsers.add_parser("borrow", help="Borrow from vault", description="Borrows XCH from collateral vault.")
+    vault_borrow_subparser = vault_subparsers.add_parser(
+        "borrow", help="Borrow from vault", description="Borrows XCH from collateral vault."
+    )
     vault_borrow_subparser.add_argument("amount", type=float, help="Amount of BYC to borrow")
 
     ## repay ##
-    vault_repay_subparser = vault_subparsers.add_parser("repay", help="Repay to vault", description="Repays XCH to collateral vault.")
+    vault_repay_subparser = vault_subparsers.add_parser(
+        "repay", help="Repay to vault", description="Repays XCH to collateral vault."
+    )
     vault_repay_subparser.add_argument("amount", type=float, help="Amount of BYC to repay")
 
     ### SAVINGS VAULT ###
-    savings_parser = subparsers.add_parser("savings", help="Manage a savings vault", description="Manages a savings vault.")
+    savings_parser = subparsers.add_parser(
+        "savings", help="Manage a savings vault", description="Manages a savings vault."
+    )
     savings_subparsers = savings_parser.add_subparsers(dest="action")
 
     ## show ##
-    savings_show_parser = savings_subparsers.add_parser("show", help="Show vault", description="Shows information on savings vault.")
+    savings_show_parser = savings_subparsers.add_parser(
+        "show", help="Show vault", description="Shows information on savings vault."
+    )
 
     ## deposit ##
     savings_deposit_subparser = savings_subparsers.add_parser(
@@ -981,11 +1112,14 @@ Deposits BYC to savings vault.
 By default, all accrued interest is withdrawn from treasury to savings vault on every deposit.
 This fails if accured interest does not exceed Minimum Treasury Delta. In this case specify INTEREST = 0.
 To get paid a non-default amount of interest, specify the desired value via INTEREST argument.
-"""
+""",
     )
     savings_deposit_subparser.add_argument("amount", type=float, help="Amount of BYC to deposit")
     savings_deposit_subparser.add_argument(
-        "INTEREST", nargs="?", type=float, default=None,
+        "INTEREST",
+        nargs="?",
+        type=float,
+        default=None,
         help="[optional] Amount (in BYC) of accrued interest to withdraw from treasury to savings vault",
     )
 
@@ -1000,7 +1134,7 @@ Withdraw BYC from savings vault.
 By default, all accrued interest is withdrawn from treasury to savings vault on every withdrawal.
 This fails if accured interest does not exceed Minimum Treasury Delta. In this case specify INTEREST = 0.
 To get paid a non-default amount of interest, specify the desired value via INTEREST argument.
-"""
+""",
     )
     savings_withdraw_subparser.add_argument("amount", type=float, help="Amount of BYC to withdraw")
     savings_withdraw_subparser.add_argument(
@@ -1038,6 +1172,7 @@ To get paid a non-default amount of interest, specify the desired value via INTE
 
     # Tame noisy third-party loggers
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     kwargs = dict([(k.lower(), v) for k, v in vars(args).items()])
 
@@ -1089,7 +1224,7 @@ To get paid a non-default amount of interest, specify the desired value via INTE
         "MOJOS": data["mojos_per_xch"],
         "MCAT": 10 ** data["cat_decimals"],
     }
-    log.info("Protocol constants loaded successfully: %s",  rpc_client.store.path)
+    log.info("Protocol constants loaded successfully: %s", rpc_client.store.path)
 
     if args.command == "upkeep" and args.action == "liquidator":
         from circuit_cli.little_liquidator import LittleLiquidator
@@ -1099,9 +1234,11 @@ To get paid a non-default amount of interest, specify the desired value via INTE
         if args.progress != "off":
             if args.progress == "json":
                 from circuit_cli.progress import make_json_progress_handler
+
                 progress_handler = make_json_progress_handler()
             else:
                 from circuit_cli.progress import make_text_progress_handler
+
                 progress_handler = make_text_progress_handler()
 
         # Set progress handler on RPC client too so all requests are visible
@@ -1117,6 +1254,7 @@ To get paid a non-default amount of interest, specify the desired value via INTE
             current_time=getattr(args, "current_time", None),
             progress_handler=progress_handler,
             min_collateral_to_keep=getattr(args, "min_collateral_to_keep", 2.0),
+            disable_dexie_offers=getattr(args, "disable_dexie_offers", False),
         )
         if args.run_once:
             result = await liquidator.process_once()
@@ -1181,6 +1319,7 @@ To get paid a non-default amount of interest, specify the desired value via INTE
             print(json.dumps(result))
         else:
             from circuit_cli.json_formatter import format_circuit_response
+
             print(format_circuit_response(result))
     except (AttributeError, KeyError) as e:
         log.exception(f"Failed to run command: {e}")
