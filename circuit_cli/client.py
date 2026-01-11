@@ -766,6 +766,81 @@ class CircuitRPCClient:
         """
         return await self.bills_toggle(coin_name, info)
 
+    async def wallet_split_coin(self, coin_name, amounts, target_puzzle_hashes=None):
+        """Split a coin into multiple coins, depending on amounts"""
+        payload = self._build_transaction_payload(
+            {
+                "coin_name": coin_name,
+                "amounts": amounts,
+                "target_puzzle_hashes": target_puzzle_hashes,
+            }
+        )
+        return await self._process_transaction("/split_coin", payload)
+
+    async def wallet_split(self, coin_name, amounts, target_puzzle_hashes=None):
+        """
+        Split a coin into multiple coins.
+
+        This is a CLI wrapper for wallet_split_coin that converts XCH amounts to mojos.
+
+        Args:
+            coin_name: Name of the coin to split
+            amounts: List of amounts in XCH (floats)
+            target_puzzle_hashes: Optional list of target puzzle hashes for the resulting coins
+
+        Returns:
+            dict: Transaction response after signing, pushing, and confirming
+        """
+        # Convert XCH amounts to mojos
+        amounts_in_mojos = [self._convert_number(amount, "MOJOS") for amount in amounts]
+        return await self.wallet_split_coin(coin_name, amounts_in_mojos, target_puzzle_hashes)
+
+    async def offer_make(
+        self, xch_amount: float, byc_amount: float, ignore_coin_names: list[str] = None, expires_in_seconds=600
+    ):
+        """
+        Create an offer to trade assets.
+
+
+        """
+        payload = self._build_transaction_payload(
+            {
+                "byc_amount": self._convert_number(byc_amount, "MCAT"),
+                "xch_amount": self._convert_number(xch_amount, "MOJOS"),
+                "ignore_coin_names": ignore_coin_names,
+                "expires_in_seconds": expires_in_seconds,
+            }
+        )
+        resp = await self._make_api_request("POST", "/make_offer", payload)
+        return resp
+
+    async def wallet_take_offer(self, offer_bech32: str):
+        """
+        Take an offer.
+
+        Args:
+            offer_bech32: The offer in bech32 format to take
+
+        Returns:
+            dict: Transaction response after signing, pushing, and confirming
+        """
+        payload = self._build_transaction_payload({"offer_bech32": offer_bech32})
+        taker_bundle_json = await self._make_api_request("POST", "/take_offer", payload)
+        # taker_offer = Offer.from_bech32(taker_bech32['offer'])
+        taker_bundle = SpendBundle.from_json_dict(taker_bundle_json)
+        signed_bundle = await self.sign_bundle(taker_bundle)
+        taker_offer = Offer.from_spend_bundle(
+            signed_bundle
+        )  # Offer(taker_offer.requested_payments, signed_bundle, taker_offer.driver_dict)
+        maker_offer = Offer.from_bech32(offer_bech32)
+        offer = Offer.aggregate([maker_offer, taker_offer])
+        log.debug("Full offer: %s", offer.summary())
+        valid_bundle = offer.to_valid_spend()
+        sig_response = await self.sign_and_push(valid_bundle, sign=False)
+        signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
+        await self.wait_for_confirmation(signed_bundle)
+        return signed_bundle.to_json_dict()
+
     ### COLLATERAL VAULT ###
     async def vault_show(self):
         """
@@ -1036,9 +1111,9 @@ class CircuitRPCClient:
             The transaction result from processing the configuration update.
         """
 
-        assert not (
-            cancel_deactivation and deactivate
-        ), "Cannot both deactivate and cancel deactivation at the same time"
+        assert not (cancel_deactivation and deactivate), (
+            "Cannot both deactivate and cancel deactivation at the same time"
+        )
 
         coin_name = await self._get_coin_name_if_needed(coin_name, "/announcer", "No announcer found")
 
@@ -1129,7 +1204,6 @@ class CircuitRPCClient:
         print("export CIRCUIT_GENESIS_COIN_NAME=" + response["genesis_coin_name"])
         print("export CIRCUIT_ANNOUNCER_REGISTRY_EVE_COIN_NAME=" + response["registry_eve_coin_name"])
         print("export CIRCUIT_APPROVED_MOD_HASHES=" + response["approval_mod_hashes_serialized"])
-
 
     async def upkeep_state(
         self, vaults=False, surplus_auctions=False, recharge_auctions=False, treasury=False, bills=False
@@ -1257,7 +1331,6 @@ class CircuitRPCClient:
         self.store.unlock()
 
     async def upkeep_announcers_approve(self, coin_name=None, create_conditions=False, bill_coin_name=None, label=None):
-
         assert create_conditions or bill_coin_name is not None, "Must specify either -c or -b option"
 
         if create_conditions:
@@ -1322,7 +1395,6 @@ class CircuitRPCClient:
             return sig_response
 
     async def upkeep_announcers_disapprove(self, coin_name, create_conditions=False, bill_coin_name=None):
-
         assert create_conditions or bill_coin_name is not None, "Must specify either -c or -b option"
 
         if create_conditions:
@@ -1621,7 +1693,9 @@ class CircuitRPCClient:
         log.info("Treasury rebalanced")
         return sig_response
 
-    async def upkeep_treasury_launch(self, successor_launcher_id=None, create_conditions=False, bill_coin_name=None, byc_coin_name=None, label=None):
+    async def upkeep_treasury_launch(
+        self, successor_launcher_id=None, create_conditions=False, bill_coin_name=None, byc_coin_name=None, label=None
+    ):
         if not successor_launcher_id:
             response = await self.client.post(
                 "/treasury",
@@ -1682,7 +1756,7 @@ class CircuitRPCClient:
             print("Launching treasury coin with successor launcher ID", successor_launcher_id)
             if bill_response.is_error:
                 raise Exception(f"Failed to implement bill: {bill_response.status_code} {bill_response.text}")
-            bundle_dict = bill_response.json()['bundle']
+            bundle_dict = bill_response.json()["bundle"]
             implement_bundle = SpendBundle.from_json_dict(bundle_dict)
 
             response = await self.client.post(
@@ -1692,7 +1766,7 @@ class CircuitRPCClient:
                     "coin_name": byc_coin_name,
                     "fee_per_cost": self.fee_per_cost,
                     "successor_launcher_id": None,
-                    "ignore_coin_names": [x.name().hex() for x in implement_bundle.removals()]
+                    "ignore_coin_names": [x.name().hex() for x in implement_bundle.removals()],
                 },
             )
             if response.is_error:
@@ -1780,7 +1854,7 @@ class CircuitRPCClient:
                 },
             )
             vaults = response.json()
-            coin_name = max(vaults, key=lambda x: x["fees_to_transfer"])["name"]
+            coin_name = max(vaults, key=lambda x: x["stability_fees_to_transfer"])["name"]
 
         log.info("Transferring Stability Fees from collateral vault %s", coin_name)
 
@@ -1809,7 +1883,7 @@ class CircuitRPCClient:
         )
         return sig_response
 
-    async def upkeep_vaults_liquidate(self, coin_name, target_puzzle_hash=None, ignore_coin_names: list[str] = None):
+    async def upkeep_vaults_liquidate(self, coin_name, target_puzzle_hash=None):
         if not target_puzzle_hash:
             target_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
@@ -1820,7 +1894,6 @@ class CircuitRPCClient:
                 "vault_name": coin_name,
                 "initiator_puzzle_hash": target_puzzle_hash,
                 "fee_per_cost": self.fee_per_cost,
-                "ignore_coin_names": ignore_coin_names,
             },
             headers={"Content-Type": "application/json"},
         )
@@ -1871,7 +1944,7 @@ class CircuitRPCClient:
                 "target_puzzle_hash": keeper_puzzle_hash,
                 "info": info,
                 "fee_per_cost": self.fee_per_cost,
-                "ignore_coin_names": ignore_coin_names,
+                "ignore_coin_names": ignore_coin_names if ignore_coin_names else [],
             },
             headers={"Content-Type": "application/json"},
         )
@@ -1882,85 +1955,6 @@ class CircuitRPCClient:
         signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
         await self.wait_for_confirmation(signed_bundle)
         return sig_response
-
-    async def wallet_split_coin(
-        self, coin_name, amounts, target_puzzle_hashes=None, ignore_coin_names: list[str] = None
-    ):
-        """Split a coin into multiple coins, depending on amounts"""
-        payload = self._build_transaction_payload(
-            {
-                "coin_name": coin_name,
-                "amounts": amounts,
-                "target_puzzle_hashes": target_puzzle_hashes,
-                "ignore_coin_names": ignore_coin_names,
-            }
-        )
-        return await self._process_transaction("/split_coin", payload)
-
-    async def wallet_split(self, coin_name, amounts, target_puzzle_hashes=None, ignore_coin_names: list[str] = None):
-        """
-        Split a coin into multiple coins.
-
-        This is a CLI wrapper for wallet_split_coin that converts XCH amounts to mojos.
-
-        Args:
-            coin_name: Name of the coin to split
-            amounts: List of amounts in XCH (floats)
-            target_puzzle_hashes: Optional list of target puzzle hashes for the resulting coins
-            ignore_coin_names: Optional list of coin names to ignore
-
-        Returns:
-            dict: Transaction response after signing, pushing, and confirming
-        """
-        # Convert XCH amounts to mojos
-        amounts_in_mojos = [self._convert_number(amount, "MOJOS") for amount in amounts]
-        return await self.wallet_split_coin(coin_name, amounts_in_mojos, target_puzzle_hashes, ignore_coin_names)
-
-    async def offer_make(
-        self, xch_amount: float, byc_amount: float, ignore_coin_names: list[str] = None, expires_in_seconds=600
-    ):
-        """
-        Create an offer to trade assets.
-
-
-        """
-        payload = self._build_transaction_payload(
-            {
-                "byc_amount": self._convert_number(byc_amount, "MCAT"),
-                "xch_amount": self._convert_number(xch_amount, "MOJOS"),
-                "ignore_coin_names": ignore_coin_names,
-                "expires_in_seconds": expires_in_seconds,
-            }
-        )
-        resp = await self._make_api_request("POST", "/make_offer", payload)
-        return resp
-
-    async def wallet_take_offer(self, offer_bech32: str):
-        """
-        Take an offer.
-
-        Args:
-            offer_bech32: The offer in bech32 format to take
-
-        Returns:
-            dict: Transaction response after signing, pushing, and confirming
-        """
-        payload = self._build_transaction_payload({"offer_bech32": offer_bech32})
-        taker_bundle_json = await self._make_api_request("POST", "/take_offer", payload)
-        # taker_offer = Offer.from_bech32(taker_bech32['offer'])
-        taker_bundle = SpendBundle.from_json_dict(taker_bundle_json)
-        signed_bundle = await self.sign_bundle(taker_bundle)
-        taker_offer = Offer.from_spend_bundle(
-            signed_bundle
-        )  # Offer(taker_offer.requested_payments, signed_bundle, taker_offer.driver_dict)
-        maker_offer = Offer.from_bech32(offer_bech32)
-        offer = Offer.aggregate([maker_offer, taker_offer])
-        log.debug("Full offer: %s", offer.summary())
-        valid_bundle = offer.to_valid_spend()
-        sig_response = await self.sign_and_push(valid_bundle, sign=False)
-        signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
-        await self.wait_for_confirmation(signed_bundle)
-        return signed_bundle.to_json_dict()
 
     async def upkeep_vaults_recover(self, coin_name, ignore_coin_names=None):
         response = await self.client.post(
@@ -2058,9 +2052,9 @@ class CircuitRPCClient:
         if not coin_name:
             payload = self._build_base_payload(include_spent_coins=False, lapsed=True)
             data = await self._make_api_request("POST", "/bills", payload)
-            assert (
-                len(data) > 0
-            ), "No lapsed bills to reset found. To reset a non-lapsed bill, please specify the coin name"
+            assert len(data) > 0, (
+                "No lapsed bills to reset found. To reset a non-lapsed bill, please specify the coin name"
+            )
             coin_name = data[0]["name"]
 
         # Process as transaction
@@ -2079,7 +2073,6 @@ class CircuitRPCClient:
         max_delta: int = None,
         label=None,
     ):
-
         statutes_full_output = await self.statutes_list(full=True)
         statute_indices = statutes_full_output["statute_labels"]
         index = self._convert_statute_index(index, statute_indices)
