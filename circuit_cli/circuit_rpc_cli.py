@@ -11,6 +11,8 @@ from circuit_cli.persistence import CIRCUIT_DIR
 
 log = logging.getLogger(__name__)
 
+NEAR_LIQUIDATION_FACTOR = 1.2
+
 
 def fee_per_cost_type(value: str):
     """Custom argparse type for fee_per_cost argument."""
@@ -589,6 +591,12 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
     )
     upkeep_vaults_list_parser.add_argument(
         "-nz", "--not-seized", action="store_true", help="List vaults that have not been seized"
+    )
+    upkeep_vaults_list_parser.add_argument(
+        "-nl",
+        "--nearing-liquidation",
+        action="store_true",
+        help=f"List vaults nearing liquidation (coll ratio < liq ratio * {NEAR_LIQUIDATION_FACTOR}) that are not liquidatable yet",
     )
 
     # LATER: add -o/--ordered arg to order by outstanding SFs

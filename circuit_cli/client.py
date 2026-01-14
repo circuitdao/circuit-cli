@@ -1791,6 +1791,7 @@ class CircuitRPCClient:
         in_bad_debt=False,
         seized=False,
         not_seized=False,
+        nearing_liquidation=False,
     ):
         if not seized:
             if not not_seized:
@@ -1799,6 +1800,8 @@ class CircuitRPCClient:
                 seized = False
         else:
             seized = True
+        if not nearing_liquidation:
+            nearing_liquidation = None
         if not transferable_stability_fees:
             transferable_stability_fees = None
         if not liquidatable:
@@ -1826,6 +1829,7 @@ class CircuitRPCClient:
                     "biddable": biddable,
                     "in_bad_debt": in_bad_debt,
                     "seized": seized,
+                    "nearing_liquidation": nearing_liquidation,
                 },
             )
             return response.json()
@@ -1841,9 +1845,16 @@ class CircuitRPCClient:
                 "biddable": biddable,
                 "in_bad_debt": in_bad_debt,
                 "seized": seized,
+                "nearing_liquidation": nearing_liquidation,
             },
         )
-        return response.json()
+        if transferable_stability_fees:
+            return sorted(response.json(), key=lambda x: x["stability_fees_to_transfer"], reverse=True)
+        if nearing_liquidation:
+            return sorted(response.json(), key=lambda x: x["collateral_ratio"])
+        if seized or liquidatable or startable or in_liquidation or biddable or restartable or in_bad_debt:
+            return sorted(response.json(), key=lambda x: x["debt"], reverse=True)
+        return sorted(response.json(), key=lambda x: x["collateral"], reverse=True)
 
     async def upkeep_vaults_transfer(self, coin_name=None):
         if not coin_name:
