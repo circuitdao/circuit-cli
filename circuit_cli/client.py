@@ -1941,8 +1941,6 @@ class CircuitRPCClient:
             )
             return await self._make_api_request("POST", "/vaults/bid_auction", payload)
 
-        if amount is None or amount < 1:
-            raise ValueError("Must provide a positive bid amount")
         keeper_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
 
         response = await self.client.post(
