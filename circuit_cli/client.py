@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import logging.config
 import sys
@@ -60,9 +61,10 @@ def setup_console_logging():
 class APIError(Exception):
     """Custom exception for API-related errors."""
 
-    def __init__(self, message: str, response: Optional[httpx.Response] = None):
+    def __init__(self, message: str, response: Optional[httpx.Response] = None, spend_bundle: str = None):
         super().__init__(message)
         self.response = response
+        self.spend_bundle = spend_bundle
 
 
 class CircuitRPCClient:
@@ -676,7 +678,7 @@ class CircuitRPCClient:
             error_msg = f"Error during transaction push: {response.content}"
             if error_handling_info is not None:
                 error_msg += f" Error handling info: {error_handling_info}"
-            raise APIError(error_msg, response)
+            raise APIError(error_msg, response, json.dumps(signed_bundle.to_json_dict()))
         log.info("Transaction signed and broadcast. ID %s", tx_id)
         return response.json()
 
@@ -1895,9 +1897,6 @@ class CircuitRPCClient:
         return sig_response
 
     async def upkeep_vaults_liquidate(self, coin_name, target_puzzle_hash=None):
-        if not target_puzzle_hash:
-            target_puzzle_hash = puzzle_hash_for_synthetic_public_key(self.synthetic_public_keys[0]).hex()
-
         response = await self.client.post(
             "/vaults/start_auction",
             json={
