@@ -8,6 +8,8 @@ from chia_rs.sized_bytes import bytes32
 
 TOML_FILE = "statutes_ranges.toml"
 
+PRECISION_BPS = 10_000
+
 
 def load_ranges():
     parent_dir = Path(__file__).resolve().parent.parent
@@ -101,10 +103,8 @@ def verify_statutes(
                 Program.fromhex(value)
             except Exception:
                 raise ValueError(
-
                     f"Invalid custom conditions announcement proposed. "
                     f"Custom conditions must be a hex string convertible to Program, got {value}"
-
                 )
         if index == 0:
             try:
@@ -221,13 +221,17 @@ def verify_statutes(
         "VAULT_INITIATOR_INCENTIVE_FLAT",
         "VAULT_INITIATOR_INCENTIVE_BPS",
     ]
-    min_debt_byc = full_statutes["VAULT_MINIMUM_DEBT"]["value"] / 1000.0
-    liquidation_penalty = full_statutes["VAULT_LIQUIDATION_PENALTY_BPS"]["value"] / 10_000.0
-    initiator_incentive_flat_byc = full_statutes["VAULT_INITIATOR_INCENTIVE_FLAT"]["value"] / 1000.0
-    initiator_incentive_relative = full_statutes["VAULT_INITIATOR_INCENTIVE_BPS"]["value"] / 10_000.0
-    initiator_incentive_byc = initiator_incentive_flat_byc + initiator_incentive_relative * min_debt_byc
-    remaining_liquidation_penalty = min_debt_byc * liquidation_penalty - initiator_incentive_byc
-    if not remaining_liquidation_penalty > 0:
+    min_debt_mbyc = full_statutes["VAULT_MINIMUM_DEBT"]["value"]  # / 1000.0
+    liquidation_penalty_bps = full_statutes["VAULT_LIQUIDATION_PENALTY_BPS"]["value"]  # / 10_000.0
+    initiator_incentive_flat_mbyc = full_statutes["VAULT_INITIATOR_INCENTIVE_FLAT"]["value"]  # / 1000.0
+    initiator_incentive_relative_bps = full_statutes["VAULT_INITIATOR_INCENTIVE_BPS"]["value"]  # / 10_000.0
+    initiator_incentive_mbyc = (
+        initiator_incentive_flat_mbyc + (initiator_incentive_relative_bps * min_debt_mbyc) // PRECISION_BPS
+    )
+    remaining_liquidation_penalty = (
+        min_debt_mbyc * liquidation_penalty_bps
+    ) // PRECISION_BPS - initiator_incentive_mbyc
+    if not remaining_liquidation_penalty >= 0:
         indent = "" if bill_statute_name in relevant_statutes else "  "
         failed.append(
             f"{indent}{', '.join(relevant_statutes)}: Initiator Incentive can be larger than Liquidation Penalty"

@@ -768,7 +768,7 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         "-d", "--implementation-delay", type=int, default=None, help="Implementation delay in seconds"
     )
     bills_propose_parser.add_argument(
-        "--max-delta", type=int, default=None, help="Max absolute amount by which Statues value may change"
+        "--max-delta", type=int, default=None, help="Max absolute amount by which Statute value may change"
     )
     bills_propose_parser.add_argument(
         "-l", "--label", type=str, help="Tag this coin with a label that can be used to identify it in other operations"
@@ -1055,7 +1055,7 @@ Example:
         description="Updates Statutes Price Info to most recently matured Oracle Price Info.",
     )
     statutes_update_subparser.add_argument(
-        "-i", "--info", action="store_true", help="Show info on when Statues can be updated next"
+        "-i", "--info", action="store_true", help="Show info on when Statutes can be updated next"
     )
 
     ## announce ##
