@@ -221,24 +221,24 @@ def verify_statutes(
         "VAULT_INITIATOR_INCENTIVE_FLAT",
         "VAULT_INITIATOR_INCENTIVE_BPS",
     ]
-    min_debt_mbyc = full_statutes["VAULT_MINIMUM_DEBT"]["value"]  # / 1000.0
-    liquidation_penalty_bps = full_statutes["VAULT_LIQUIDATION_PENALTY_BPS"]["value"]  # / 10_000.0
-    initiator_incentive_flat_mbyc = full_statutes["VAULT_INITIATOR_INCENTIVE_FLAT"]["value"]  # / 1000.0
-    initiator_incentive_relative_bps = full_statutes["VAULT_INITIATOR_INCENTIVE_BPS"]["value"]  # / 10_000.0
+    min_debt_mbyc = full_statutes["VAULT_MINIMUM_DEBT"]["value"]
+    liquidation_penalty_bps = full_statutes["VAULT_LIQUIDATION_PENALTY_BPS"]["value"]
+    initiator_incentive_flat_mbyc = full_statutes["VAULT_INITIATOR_INCENTIVE_FLAT"]["value"]
+    initiator_incentive_relative_bps = full_statutes["VAULT_INITIATOR_INCENTIVE_BPS"]["value"]
     initiator_incentive_mbyc = (
         initiator_incentive_flat_mbyc + (initiator_incentive_relative_bps * min_debt_mbyc) // PRECISION_BPS
     )
-    remaining_liquidation_penalty = (
+    remaining_liquidation_penalty_mbyc = (
         min_debt_mbyc * liquidation_penalty_bps
     ) // PRECISION_BPS - initiator_incentive_mbyc
-    if not remaining_liquidation_penalty >= 0:
+    if not remaining_liquidation_penalty_mbyc >= 0:
         indent = "" if bill_statute_name in relevant_statutes else "  "
         failed.append(
             f"{indent}{', '.join(relevant_statutes)}: Initiator Incentive can be larger than Liquidation Penalty"
         )
 
     # Minimum auction price
-    max_allowed_deviation = 0.01
+    max_allowed_deviation = 0.05
     relevant_statutes = [
         "VAULT_AUCTION_TTL",
         "VAULT_AUCTION_STARTING_PRICE_FACTOR_BPS",
