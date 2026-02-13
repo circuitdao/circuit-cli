@@ -1689,10 +1689,8 @@ class CircuitRPCClient:
             treasury_data = await self._make_api_request("POST", "/treasury", {})
             return {"action_executable": treasury_data["can_rebalance"]}
 
-        log.info("Rebalancing treasury")
         payload = self._build_transaction_payload({})
         sig_response = await self._process_transaction("/treasury/rebalance", payload)
-        log.info("Treasury rebalanced")
         return sig_response
 
     async def upkeep_treasury_launch(
@@ -1869,8 +1867,6 @@ class CircuitRPCClient:
             vaults = response.json()
             coin_name = max(vaults, key=lambda x: x["stability_fees_to_transfer"])["name"]
 
-        log.info("Transferring Stability Fees from collateral vault %s", coin_name)
-
         response = await self.client.post(
             "/vaults/transfer_stability_fees",
             json={
@@ -1890,10 +1886,6 @@ class CircuitRPCClient:
         sig_response = await self.sign_and_push(bundle)
         signed_bundle: SpendBundle = SpendBundle.from_json_dict(sig_response["bundle"])
         await self.wait_for_confirmation(signed_bundle)
-        log.info(
-            f"Stability Fees transferred ({response.json()['sf_transferred'] / self.consts['MCAT']:,.3f} BYC) from "
-            f"collateral vault {coin_name}"
-        )
         return sig_response
 
     async def upkeep_vaults_liquidate(self, coin_name, target_puzzle_hash=None):
