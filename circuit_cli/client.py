@@ -1238,6 +1238,10 @@ class CircuitRPCClient:
         """Trigger a chain data sync on the RPC server."""
         return await self._make_api_request("POST", "/sync_chain_data")
 
+    async def upkeep_rpc_sync_block_stats(self):
+        """Trigger a block stats sync (BlockStats/DailyBlockStats only, no coin tables)."""
+        return await self._make_api_request("POST", "/sync_block_stats")
+
     async def upkeep_rpc_status(self):
         """Fetch the health/status of the RPC server."""
         return await self._make_api_request("GET", "/health")

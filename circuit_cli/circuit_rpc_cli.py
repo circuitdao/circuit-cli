@@ -182,6 +182,10 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         description="Shows synchronization status of backend database with blockchain",
     )
     upkeep_rpc_subparsers.add_parser("sync", help="Synchronize Circuit RPC server with Chia blockchain")
+    upkeep_rpc_subparsers.add_parser(
+        "sync-block-stats",
+        help="Sync BlockStats/DailyBlockStats only (analytics resync without touching coin tables)",
+    )
     upkeep_rpc_subparsers.add_parser("version", help="Version of Circuit RPC server")
 
     ## announcers ##
@@ -1305,7 +1309,7 @@ To get paid a non-default amount of interest, specify the desired value via INTE
         # Set default constants so client can still be used for testing
     try:
         if "subaction" in kwargs.keys():
-            function_name += f"_{args.subaction}"
+            function_name += f"_{args.subaction.replace('-', '_')}"
         del kwargs["command"]
         del kwargs["action"]
         kwargs.pop("subaction", None)
