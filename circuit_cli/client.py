@@ -1234,13 +1234,27 @@ class CircuitRPCClient:
         return clean_data
 
     ## RPC server ##
-    async def upkeep_rpc_sync(self):
-        """Trigger a chain data sync on the RPC server."""
-        return await self._make_api_request("POST", "/sync_chain_data")
+    async def upkeep_rpc_sync(self, live=False, blockstats=False):
+        """Sync the RPC server with the blockchain.
 
-    async def upkeep_rpc_sync_block_stats(self):
-        """Trigger a block stats sync (BlockStats/DailyBlockStats only, no coin tables)."""
-        return await self._make_api_request("POST", "/sync_block_stats")
+        Default (no flags): syncs both live state and block stats.
+        live=True:      sync live state only (coin tables, statutes cache).
+        blockstats=True: sync block stats only (BlockStatsV2/DailyBlockStatsV2).
+        """
+        if live:
+            return await self._make_api_request("POST", "/sync_chain_data")
+        elif blockstats:
+            return await self._make_api_request("POST", "/sync_block_stats")
+        else:
+            live_result = dict(await self._make_api_request("POST", "/sync_chain_data"))
+            stats_result = dict(await self._make_api_request("POST", "/sync_block_stats"))
+            if live_result.get("status") == "error":
+                return live_result
+            if stats_result.get("status") == "error":
+                return stats_result
+            combined_blocks = (live_result.get("blocks_synced") or 0) + (stats_result.get("blocks_synced") or 0)
+            return {"status": "done", "blocks_synced": combined_blocks}
+
 
     async def upkeep_rpc_status(self):
         """Fetch the health/status of the RPC server."""

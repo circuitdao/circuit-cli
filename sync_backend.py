@@ -2,9 +2,10 @@
 """
 Sync local Circuit backend with blockchain.
 
-Usage: python sync_backend.py [-e]
+Usage: python sync_backend.py [options]
 
-Specify -e option to exit once sync completed. Otherwise loop will continue to run.
+Default (no flags): sync both live state and block stats.
+Use -l to sync live state only, -b to sync block stats only.
 """
 
 import argparse
@@ -39,40 +40,62 @@ for name in loggers_to_quiet:
 # ─────────────────────────────────────────────────────────────────────────
 
 DEFAULT_SLEEP = 30
+MODE_BOTH = "both"
+MODE_LIVE = "live"
+MODE_STATS = "stats"
 
 
-async def call_upkeep_sync(client: CircuitRPCClient, blockstats: bool) -> Dict[str, Any]:
-    """Call the appropriate RPC sync method based on blockstats toggle."""
+async def call_sync(client: CircuitRPCClient, mode: str) -> Dict[str, Any]:
+    """Call the appropriate RPC sync endpoint(s) based on mode.
+
+    Returns a dict with keys:
+      status        "done" | "error" | "skipped"
+      blocks_synced total blocks processed across all endpoints called
+      message       error message (only on error)
+    """
     try:
-        if blockstats:
-            result = await client.upkeep_rpc_sync_block_stats()
-        else:
-            result = await client.upkeep_rpc_sync()
-        return dict(result)
+        if mode == MODE_LIVE:
+            return dict(await client.upkeep_rpc_sync(live=True))
+        elif mode == MODE_STATS:
+            return dict(await client.upkeep_rpc_sync(blockstats=True))
+        else:  # MODE_BOTH
+            return dict(await client.upkeep_rpc_sync())
     except Exception as exc:
         raise RuntimeError(f"RPC call failed: {exc}") from exc
 
 
-async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: bool, blockstats: bool):
-    """Main async loop that keeps calling the sync method."""
+async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: bool, mode: str):
+    """Main async loop that keeps calling the sync endpoint(s)."""
+    mode_label = {"both": "live state + block stats", "live": "live state", "stats": "block stats"}[mode]
     total_blocks = 0
+
+    if mode == MODE_BOTH:
+        endpoints = "/sync_chain_data + /sync_block_stats"
+    elif mode == MODE_LIVE:
+        endpoints = "/sync_chain_data"
+    else:
+        endpoints = "/sync_block_stats"
+
     while True:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        endpoint = "/sync_block_stats" if blockstats else "/sync_chain_data"
-        print(f"\n[{now}] POST {endpoint}")
+        print(f"\n[{now}] POST {endpoints}")
 
         try:
-            result = await call_upkeep_sync(client, blockstats)
-            # print("Response:", json.dumps(result, indent=2))
+            result = await call_sync(client, mode)
 
             status = result.get("status", "missing")
             blocks = result.get("blocks_synced", -1)
-            total_blocks += blocks
+            total_blocks += max(blocks, 0)
 
             if status == "error":
                 msg = result.get("message", "No message")
                 print(f"RPC error: {msg}")
                 print(f"Sleeping {sleep_sec}s...")
+                await asyncio.sleep(sleep_sec)
+                continue
+
+            if status == "skipped":
+                print(f"Sync skipped (another sync in progress). Sleeping {sleep_sec}s...")
                 await asyncio.sleep(sleep_sec)
                 continue
 
@@ -83,14 +106,14 @@ async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: 
                 continue
 
             if blocks == 0:
-                print("blocks_synced = 0 → sync appears complete for now")
+                print(f"no more blocks to sync → complete for now")
                 print(f"total blocks synced: {total_blocks}")
                 if continue_on_zero:
                     print(f"Sleeping {sleep_sec}s before next check")
                     await asyncio.sleep(sleep_sec)
                     continue
                 else:
-                    print("Fully syned. Exiting")
+                    print(f"Fully synced {mode_label}. Exiting")
                     sys.exit(10)
 
             print(f"Success: {blocks} blocks synced (total: {total_blocks}) → running again immediately")
@@ -107,12 +130,23 @@ async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: 
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sync Circuit backend with Chia blockchain.")
-    parser.add_argument(
+    parser = argparse.ArgumentParser(
+        description="Sync Circuit backend with Chia blockchain.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Default (no flags): sync both live state and block stats.",
+    )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "-l",
+        "--live",
+        action="store_true",
+        help="sync live state only (coin tables, statutes cache)",
+    )
+    mode_group.add_argument(
         "-b",
         "--blockstats",
         action="store_true",
-        help="sync block stats instead of live state",
+        help="sync block stats only (BlockStatsV2/DailyBlockStatsV2)",
     )
     parser.add_argument(
         "-c",
@@ -130,22 +164,28 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.live:
+        mode = MODE_LIVE
+    elif args.blockstats:
+        mode = MODE_STATS
+    else:
+        mode = MODE_BOTH
+
     base_url = os.environ.get("BASE_URL")
     if not base_url:
         print("Error: Environment variable BASE_URL is not set.", file=sys.stderr)
         print("Example: export BASE_URL=http://localhost:8000", file=sys.stderr)
         sys.exit(1)
 
+    mode_label = {"both": "live state + block stats", "live": "live state", "stats": "block stats"}[mode]
     print("CircuitDAO RPC sync loop started")
     print(f"  Base URL: {base_url}")
-    print("  Mode: " + ("sync live state" if not args.blockstats else "sync block stats"))
+    print(f"  Mode: {mode_label}")
+    print(f"  Sleep on failure: {args.sleep}s")
     if args.continue_on_zero:
-        print(f"  Sleep on failure: {args.sleep}s")
         print(f"  Wait for new blocks when synced (sleep for {args.sleep}s)")
     else:
-        print(f"  Sleep on failure: {args.sleep}s")
         print(f"  Exit when synced")
-
     print("Press Ctrl+C to stop")
     print("-" * 40)
 
@@ -160,10 +200,10 @@ def main():
     asyncio.set_event_loop(loop)
 
     try:
-        loop.run_until_complete(sync_loop(client, args.sleep, args.continue_on_zero, args.blockstats))
+        loop.run_until_complete(sync_loop(client, args.sleep, args.continue_on_zero, mode))
     finally:
         # Clean shutdown
-        loop.run_until_complete(client.close())  # if client has async close method
+        loop.run_until_complete(client.close())
         loop.close()
 
 
