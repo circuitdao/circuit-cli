@@ -112,7 +112,7 @@ def main():
         "-b",
         "--blockstats",
         action="store_true",
-        help="sync block stats only",
+        help="sync block stats instead of live state",
     )
     parser.add_argument(
         "-c",
@@ -138,7 +138,7 @@ def main():
 
     print("CircuitDAO RPC sync loop started")
     print(f"  Base URL: {base_url}")
-    print("  Mode: " + ("sync all" if not args.blockstats else "sync block stats only"))
+    print("  Mode: " + ("sync live state" if not args.blockstats else "sync block stats"))
     if args.continue_on_zero:
         print(f"  Sleep on failure: {args.sleep}s")
         print(f"  Wait for new blocks when synced (sleep for {args.sleep}s)")
