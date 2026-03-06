@@ -1332,6 +1332,8 @@ To get paid a non-default amount of interest, specify the desired value via INTE
         kwargs.pop("current_time", None)
         log.info(f"Calling {function_name} with {kwargs}")
         result = await getattr(rpc_client, f"{function_name}")(**kwargs)
+        if result is None:
+            return
         if args.json:
             print(json.dumps(result))
         else:

@@ -1197,7 +1197,6 @@ class CircuitRPCClient:
         if not exports:
             return response
 
-        print("ENVIRONMENT VARIABLES:             !BACKUP THESE!")
         print("export CIRCUIT_STATUTES_STRUCT=" + response["statutes_struct_serialized"])
         print(
             f"export CIRCUIT_ANNOUNCER_REGISTRY_CONSTRAINTS="
@@ -1254,7 +1253,6 @@ class CircuitRPCClient:
                 return stats_result
             combined_blocks = (live_result.get("blocks_synced") or 0) + (stats_result.get("blocks_synced") or 0)
             return {"status": "done", "blocks_synced": combined_blocks}
-
 
     async def upkeep_rpc_status(self):
         """Fetch the health/status of the RPC server."""
@@ -2203,7 +2201,7 @@ class CircuitRPCClient:
         return await self._process_transaction("/oracle/update", payload)
 
     ### STATUTES ###
-    async def statutes_list(self, full=False, exports=False):
+    async def statutes_list(self, full=False):
         """List protocol statutes.
 
         Args:
