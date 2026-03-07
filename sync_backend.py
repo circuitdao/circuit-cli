@@ -278,23 +278,20 @@ def main():
     print("Press Ctrl+C to stop")
     print("-" * 40)
 
-    # Create client once
-    client = CircuitRPCClient(base_url, None)
-    # Re-silence circuit_cli after CircuitRPCClient's constructor may have re-enabled it
-    logging.getLogger("circuit_cli").setLevel(logging.ERROR)
-    logging.getLogger("circuit_cli").propagate = False
-
-    # Create one event loop and run the async loop forever
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    async def run():
+        client = CircuitRPCClient(base_url, None)
+        # Re-silence circuit_cli after CircuitRPCClient's constructor may have re-enabled it
+        logging.getLogger("circuit_cli").setLevel(logging.ERROR)
+        logging.getLogger("circuit_cli").propagate = False
+        try:
+            await sync_loop(client, args.sleep, args.continue_on_zero, mode)
+        finally:
+            await client.close()
 
     try:
-        loop.run_until_complete(sync_loop(client, args.sleep, args.continue_on_zero, mode))
+        asyncio.run(run())
     except KeyboardInterrupt:
         print("\nStopped by user.")
-    finally:
-        loop.run_until_complete(client.close())
-        loop.close()
 
 
 if __name__ == "__main__":

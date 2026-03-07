@@ -48,6 +48,7 @@ if [ "$1" = "set" ]; then
     main)
         if [ "$LOCAL" = "local" ]; then
         export BASE_URL="http://localhost:8000"
+        export DATABASE_URL=postgresql://$(whoami)@localhost:5432/circuitdao
         #echo "Warning: Using local backend for mainnet context. Set ADD_SIG_DATA/FEE_PER_COST manually if needed."
       else
         export BASE_URL="https://api.circuitdao.com"
@@ -58,6 +59,7 @@ if [ "$1" = "set" ]; then
     test)
       if [ "$LOCAL" = "local" ]; then
         export BASE_URL="http://localhost:8000"
+        export DATABASE_URL=postgresql://$(whoami)@localhost:5432/circuitdao
         #echo "Warning: Using local backend for testnet context. Set ADD_SIG_DATA/FEE_PER_COST manually if needed."
       else
         export BASE_URL="https://testnet-api.circuitdao.com"
@@ -78,6 +80,8 @@ if [ "$1" = "set" ]; then
       ;;
   esac
 
+  unset DATABASE_URL
+
 elif [ "$1" = "clear" ]; then
   KEEP_KEY="$2"
   if [ "$KEEP_KEY" = "-h" ] || [ "$KEEP_KEY" = "--help" ]; then
@@ -87,6 +91,7 @@ elif [ "$1" = "clear" ]; then
   fi
 
   unset BASE_URL
+  unset DATABASE_URL
   unset ADD_SIG_DATA
   unset FEE_PER_COST
 
@@ -120,5 +125,6 @@ else
 fi
 
 echo "BASE_URL: ${BASE_URL:-<unset>}"
+echo "DATABASE_URL: ${DATABASE_URL:-<unset>}"
 echo "ADD_SIG_DATA: ${ADD_SIG_DATA:-<unset>}"
 echo "FEE_PER_COST: ${FEE_PER_COST:-<unset>}"
