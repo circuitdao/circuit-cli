@@ -159,10 +159,6 @@ async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: 
             print(f"Success: {blocks} blocks scanned{ops_info} (total: {total_blocks}, {total_ops} with ops){height_info()} → running again immediately")
             # no sleep → fast loop during catch-up
 
-        except KeyboardInterrupt:
-            print("\nStopped by user.")
-            sys.exit(0)
-
         except Exception as exc:
             print(f"Error during sync: {exc}")
             print(f"Sleeping {sleep_sec}s...")
@@ -294,8 +290,9 @@ def main():
 
     try:
         loop.run_until_complete(sync_loop(client, args.sleep, args.continue_on_zero, mode))
+    except KeyboardInterrupt:
+        print("\nStopped by user.")
     finally:
-        # Clean shutdown
         loop.run_until_complete(client.close())
         loop.close()
 
