@@ -6,12 +6,14 @@ Usage: python sync_backend.py [options]
 
 Default (no flags): sync both live state and block stats.
 Use -l to sync live state only, -b to sync block stats only.
+Use -s to wipe block stats tables and resync from scratch (local only).
 """
 
 import argparse
 import asyncio
 import logging
 import os
+import subprocess
 import sys
 from datetime import datetime
 from typing import Any, Dict
@@ -43,6 +45,29 @@ DEFAULT_SLEEP = 30
 MODE_BOTH = "both"
 MODE_LIVE = "live"
 MODE_STATS = "stats"
+
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
+
+
+def is_local_url(url: str) -> bool:
+    return any(h in url for h in LOCAL_HOSTS)
+
+
+def reset_block_stats(database_url: str) -> None:
+    sql = (
+        "TRUNCATE TABLE blockstatsv2, dailyblockstatsv2; "
+        "TRUNCATE TABLE liveblockhash; "
+        "DELETE FROM statslastheight WHERE id = 1;"
+    )
+    result = subprocess.run(
+        ["psql", database_url, "-c", sql],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"Error resetting block stats tables:\n{result.stderr}", file=sys.stderr)
+        sys.exit(1)
+    print("Block stats tables cleared (blockstatsv2, dailyblockstatsv2, liveblockhash, statslastheight).")
 
 
 async def call_sync(client: CircuitRPCClient, mode: str) -> Dict[str, Any]:
@@ -149,6 +174,18 @@ def main():
         help="sync block stats only (BlockStatsV2/DailyBlockStatsV2)",
     )
     parser.add_argument(
+        "-s",
+        "--scratch",
+        action="store_true",
+        help="wipe block stats tables and resync from scratch (implies -b, local backend only)",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="skip confirmation prompt when using -s",
+    )
+    parser.add_argument(
         "-c",
         "--continue",
         dest="continue_on_zero",
@@ -156,7 +193,6 @@ def main():
         help="wait for new blocks when synced instead of exiting",
     )
     parser.add_argument(
-        "-s",
         "--sleep",
         type=int,
         default=DEFAULT_SLEEP,
@@ -164,9 +200,13 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.scratch and args.live:
+        print("Error: -s/--scratch cannot be used with -l/--live (block stats only).", file=sys.stderr)
+        sys.exit(1)
+
     if args.live:
         mode = MODE_LIVE
-    elif args.blockstats:
+    elif args.blockstats or args.scratch:
         mode = MODE_STATS
     else:
         mode = MODE_BOTH
@@ -176,6 +216,44 @@ def main():
         print("Error: Environment variable BASE_URL is not set.", file=sys.stderr)
         print("Example: export BASE_URL=http://localhost:8000", file=sys.stderr)
         sys.exit(1)
+
+    if args.scratch:
+        if not is_local_url(base_url):
+            print(
+                f"Error: -s/--scratch is only allowed against a local backend.\n"
+                f"  BASE_URL={base_url}\n"
+                f"  Set BASE_URL to a local address (localhost / 127.0.0.1) before using -s.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
+            print(
+                "Error: DATABASE_URL is not set. Export it before using -s.\n"
+                "  Example: export DATABASE_URL=postgresql://user@localhost/circuitdao",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if not is_local_url(database_url):
+            print(
+                f"Error: -s/--scratch is only allowed against a local database.\n"
+                f"  DATABASE_URL points to a non-local host. Aborting.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if not args.yes:
+            print("WARNING: This will wipe blockstatsv2, dailyblockstatsv2, liveblockhash and statslastheight.")
+            print(f"  BASE_URL:     {base_url}")
+            print(f"  DATABASE_URL: {database_url}")
+            answer = input("Proceed? [y/N] ").strip().lower()
+            if answer != "y":
+                print("Aborted.")
+                sys.exit(0)
+
+        reset_block_stats(database_url)
 
     mode_label = {"both": "live state + block stats", "live": "live state", "stats": "block stats"}[mode]
     print("CircuitDAO RPC sync loop started")
