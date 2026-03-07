@@ -1252,7 +1252,12 @@ class CircuitRPCClient:
             if stats_result.get("status") == "error":
                 return stats_result
             combined_blocks = (live_result.get("blocks_synced") or 0) + (stats_result.get("blocks_synced") or 0)
-            return {"status": "done", "blocks_synced": combined_blocks}
+            return {
+                "status": "done",
+                "blocks_synced": combined_blocks,
+                "last_height": stats_result.get("last_height"),
+                "last_timestamp": stats_result.get("last_timestamp"),
+            }
 
     async def upkeep_rpc_status(self):
         """Fetch the health/status of the RPC server."""

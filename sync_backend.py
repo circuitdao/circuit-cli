@@ -15,7 +15,7 @@ import logging
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from circuit_cli.client import CircuitRPCClient
@@ -110,7 +110,18 @@ async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: 
 
             status = result.get("status", "missing")
             blocks = result.get("blocks_synced", -1)
+            last_height = result.get("last_height")
+            last_timestamp = result.get("last_timestamp")
             total_blocks += max(blocks, 0)
+
+            def height_info() -> str:
+                if last_height is None:
+                    return ""
+                parts = [f"height {last_height}"]
+                if last_timestamp:
+                    utc = datetime.fromtimestamp(last_timestamp, tz=timezone.utc)
+                    parts.append(utc.strftime("%Y-%m-%d %H:%M UTC"))
+                return " | " + ", ".join(parts)
 
             if status == "error":
                 msg = result.get("message", "No message")
@@ -131,7 +142,7 @@ async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: 
                 continue
 
             if blocks == 0:
-                print(f"no more blocks to sync → complete for now")
+                print(f"no more blocks to sync → complete for now{height_info()}")
                 print(f"total blocks synced: {total_blocks}")
                 if continue_on_zero:
                     print(f"Sleeping {sleep_sec}s before next check")
@@ -141,7 +152,7 @@ async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: 
                     print(f"Fully synced {mode_label}. Exiting")
                     sys.exit(10)
 
-            print(f"Success: {blocks} blocks synced (total: {total_blocks}) → running again immediately")
+            print(f"Success: {blocks} blocks synced (total: {total_blocks}){height_info()} → running again immediately")
             # no sleep → fast loop during catch-up
 
         except KeyboardInterrupt:
@@ -175,13 +186,13 @@ def main():
     )
     parser.add_argument(
         "-s",
-        "--scratch",
+        "--from-scratch",
         action="store_true",
         help="wipe block stats tables and resync from scratch (implies -b, local backend only)",
     )
     parser.add_argument(
-        "-y",
-        "--yes",
+        "-f",
+        "--force",
         action="store_true",
         help="skip confirmation prompt when using -s",
     )
@@ -201,7 +212,7 @@ def main():
     args = parser.parse_args()
 
     if args.scratch and args.live:
-        print("Error: -s/--scratch cannot be used with -l/--live (block stats only).", file=sys.stderr)
+        print("Error: -s/--from-scratch cannot be used with -l/--live (block stats only).", file=sys.stderr)
         sys.exit(1)
 
     if args.live:
@@ -238,7 +249,7 @@ def main():
 
         if not is_local_url(database_url):
             print(
-                f"Error: -s/--scratch is only allowed against a local database.\n"
+                f"Error: -s/--from-scratch is only allowed against a local database.\n"
                 f"  DATABASE_URL points to a non-local host. Aborting.",
                 file=sys.stderr,
             )
@@ -249,7 +260,7 @@ def main():
             print(f"  BASE_URL:     {base_url}")
             print(f"  DATABASE_URL: {database_url}")
             answer = input("Proceed? [y/N] ").strip().lower()
-            if answer != "y":
+            if not answer in ["y", "Y", "yes", "YES", "Yes"]:
                 print("Aborted.")
                 sys.exit(0)
 
