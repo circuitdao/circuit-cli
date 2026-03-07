@@ -1255,6 +1255,7 @@ class CircuitRPCClient:
             return {
                 "status": "done",
                 "blocks_synced": combined_blocks,
+                "blocks_with_ops": stats_result.get("blocks_with_ops", 0),
                 "last_height": stats_result.get("last_height"),
                 "last_timestamp": stats_result.get("last_timestamp"),
             }

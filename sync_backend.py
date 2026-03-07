@@ -93,6 +93,7 @@ async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: 
     """Main async loop that keeps calling the sync endpoint(s)."""
     mode_label = {"both": "live state + block stats", "live": "live state", "stats": "block stats"}[mode]
     total_blocks = 0
+    total_ops = 0
 
     if mode == MODE_BOTH:
         endpoints = "/sync_chain_data + /sync_block_stats"
@@ -110,9 +111,11 @@ async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: 
 
             status = result.get("status", "missing")
             blocks = result.get("blocks_synced", -1)
+            blocks_with_ops = result.get("blocks_with_ops")
             last_height = result.get("last_height")
             last_timestamp = result.get("last_timestamp")
             total_blocks += max(blocks, 0)
+            total_ops += max(blocks_with_ops or 0, 0)
 
             def height_info() -> str:
                 if last_height is None:
@@ -143,7 +146,7 @@ async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: 
 
             if blocks == 0:
                 print(f"no more blocks to sync → complete for now{height_info()}")
-                print(f"total blocks synced: {total_blocks}")
+                print(f"total blocks scanned: {total_blocks}, total with ops: {total_ops}")
                 if continue_on_zero:
                     print(f"Sleeping {sleep_sec}s before next check")
                     await asyncio.sleep(sleep_sec)
@@ -152,7 +155,8 @@ async def sync_loop(client: CircuitRPCClient, sleep_sec: int, continue_on_zero: 
                     print(f"Fully synced {mode_label}. Exiting")
                     sys.exit(10)
 
-            print(f"Success: {blocks} blocks synced (total: {total_blocks}){height_info()} → running again immediately")
+            ops_info = f", {blocks_with_ops} with ops" if blocks_with_ops is not None else ""
+            print(f"Success: {blocks} blocks scanned{ops_info} (total: {total_blocks}, {total_ops} with ops){height_info()} → running again immediately")
             # no sleep → fast loop during catch-up
 
         except KeyboardInterrupt:
@@ -211,13 +215,13 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.scratch and args.live:
+    if args.from_scratch and args.live:
         print("Error: -s/--from-scratch cannot be used with -l/--live (block stats only).", file=sys.stderr)
         sys.exit(1)
 
     if args.live:
         mode = MODE_LIVE
-    elif args.blockstats or args.scratch:
+    elif args.blockstats or args.from_scratch:
         mode = MODE_STATS
     else:
         mode = MODE_BOTH
@@ -228,7 +232,7 @@ def main():
         print("Example: export BASE_URL=http://localhost:8000", file=sys.stderr)
         sys.exit(1)
 
-    if args.scratch:
+    if args.from_scratch:
         if not is_local_url(base_url):
             print(
                 f"Error: -s/--scratch is only allowed against a local backend.\n"
@@ -242,7 +246,7 @@ def main():
         if not database_url:
             print(
                 "Error: DATABASE_URL is not set. Export it before using -s.\n"
-                "  Example: export DATABASE_URL=postgresql://user@localhost/circuitdao",
+                "  Example: export DATABASE_URL=postgresql://$(whoami)@localhost:5432/circuitdao",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -255,7 +259,7 @@ def main():
             )
             sys.exit(1)
 
-        if not args.yes:
+        if not args.force:
             print("WARNING: This will wipe blockstatsv2, dailyblockstatsv2, liveblockhash and statslastheight.")
             print(f"  BASE_URL:     {base_url}")
             print(f"  DATABASE_URL: {database_url}")
