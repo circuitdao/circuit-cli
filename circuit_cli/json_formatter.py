@@ -41,6 +41,8 @@ class CircuitJSONFormatter:
             r"^vault_initiator_incentive_flat_fee$",
             r"^(min|max)_coin_amount$",
             r"^treasury_balance$",
+            r"^savings_balance$",
+            r"^accrued_interest$",
         ]
 
         self.crt_patterns = [
