@@ -744,7 +744,11 @@ class CircuitRPCClient:
             :param ignore_coin_names:
         """
         payload = self._build_base_payload(coin_type=type, ignore_coin_names=ignore_coin_names)
-        return await self._make_api_request("POST", "/coins", payload)
+        response = await self._make_api_request("POST", "/coins", payload)
+        for coin in response:
+            if "symbol" in coin and "amount" in coin:
+                coin[f"{coin['symbol'].lower()}_amount"] = coin.pop("amount")
+        return response
 
     async def wallet_toggle(self, coin_name: str, info=False):
         """
@@ -2040,6 +2044,9 @@ class CircuitRPCClient:
             include_spent_coins=incl_spent,
         )
         response = await self._make_api_request("POST", "/bills", payload)
+        for bill in response:
+            if "amount" in bill:
+                bill["crt_amount"] = bill.pop("amount")
         return response
 
     async def bills_toggle(self, coin_name, info=False):
@@ -2101,6 +2108,7 @@ class CircuitRPCClient:
         statutes_full_output = await self.statutes_list(full=True)
         statute_indices = statutes_full_output["statute_labels"]
         index = self._convert_statute_index(index, statute_indices)
+        threshold_amount_to_propose = self._convert_number(proposal_threshold, "MCAT")
 
         # Verify Statutes
         if not force:
@@ -2110,7 +2118,7 @@ class CircuitRPCClient:
                 expected_statutes,
                 index,
                 value,
-                proposal_threshold,
+                threshold_amount_to_propose,
                 veto_interval,
                 implementation_delay,
                 max_delta,
@@ -2120,11 +2128,11 @@ class CircuitRPCClient:
         # Get coin name if not provided, pick a suitable governance coin
         if coin_name is None:
             statute_name = statute_indices[index][0]
-            threshold_amount_to_propose = statutes_full_output["full_implemented_statutes"][statute_name][
+            current_threshold_amount_to_propose = statutes_full_output["full_implemented_statutes"][statute_name][
                 "threshold_amount_to_propose"
             ]
             payload = self._build_base_payload(
-                include_spent_coins=False, empty=True, min_amount=threshold_amount_to_propose + 1
+                include_spent_coins=False, empty=True, min_amount=current_threshold_amount_to_propose + 1
             )
             data = await self._make_api_request("POST", "/bills", payload)
             if not data:
@@ -2145,7 +2153,7 @@ class CircuitRPCClient:
                 "statute_index": index,
                 "value": value,
                 "value_is_program": False,
-                "threshold_amount_to_propose": self._convert_number(proposal_threshold, "MCAT"),
+                "threshold_amount_to_propose": threshold_amount_to_propose,
                 "veto_interval": self._convert_number(veto_interval),
                 "implementation_delay": self._convert_number(implementation_delay),
                 "max_delta": self._convert_number(max_delta),

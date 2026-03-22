@@ -769,7 +769,7 @@ Use 'circuit-cli <command> -h' for detailed help on any command.
         "-p",
         "--proposal-threshold",
         default=None,
-        type=int,
+        type=float,
         help="Min amount of CRT required to propose new Statute value",
     )
     bills_propose_parser.add_argument("-v", "--veto-interval", type=int, default=None, help="Veto period in seconds")

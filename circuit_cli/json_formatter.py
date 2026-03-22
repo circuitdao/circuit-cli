@@ -413,20 +413,35 @@ class CircuitJSONFormatter:
 
     def _format_byc_amount(self, key: str, value: Union[int, float]) -> str:
         """Format BYC amount fields with appropriate units."""
-        aux = f"({value/self.MCAT_PRECISION:.3f} BYC)"
+        if key == "byc_amount":
+            aux = f"({value/self.MCAT_PRECISION:,.3f} BYC)"
+            if self.use_color and self.colors.get("dim"):
+                aux = f"{self.colors['dim']}{aux}{self.colors['reset']}"
+            return f"{value:,} {aux}"
+        aux = f"({value/self.MCAT_PRECISION:,.3f} BYC)"
         if self.use_color and self.colors.get("dim"):
             aux = f"{self.colors['dim']}{aux}{self.colors['reset']}"
         return f"{value:,} mBYC {aux}"
 
     def _format_crt_amount(self, key: str, value: Union[int, float]) -> str:
         """Format CRT amount fields with appropriate units."""
-        aux = f"({value/self.MCAT_PRECISION:.3f} CRT)"
+        if key == "crt_amount":
+            aux = f"({value/self.MCAT_PRECISION:,.3f} CRT)"
+            if self.use_color and self.colors.get("dim"):
+                aux = f"{self.colors['dim']}{aux}{self.colors['reset']}"
+            return f"{value:,} {aux}"
+        aux = f"({value/self.MCAT_PRECISION:,.3f} CRT)"
         if self.use_color and self.colors.get("dim"):
             aux = f"{self.colors['dim']}{aux}{self.colors['reset']}"
         return f"{value:,} mCRT {aux}"
 
     def _format_xch_amount(self, key: str, value: Union[int, float]) -> str:
         """Format XCH amount fields with appropriate units."""
+        if key == "xch_amount":
+            aux = f"({value/self.MOJOS_PER_XCH:.6f} XCH)"
+            if self.use_color and self.colors.get("dim"):
+                aux = f"{self.colors['dim']}{aux}{self.colors['reset']}"
+            return f"{value:,} {aux}"
         aux = f"({value/self.MOJOS_PER_XCH:.12f} XCH)"
         if self.use_color and self.colors.get("dim"):
             aux = f"{self.colors['dim']}{aux}{self.colors['reset']}"
@@ -525,6 +540,9 @@ class CircuitJSONFormatter:
             "Coinname": "Coin Name",
             "Puzzlehash": "Puzzle Hash",
             "M Of N": "M-of-N",
+            "CRT Amount": "Amount",
+            "BYC Amount": "Amount",
+            "XCH Amount": "Amount",
         }
 
         for old, new in replacements.items():
