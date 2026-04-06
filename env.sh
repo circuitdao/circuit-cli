@@ -46,12 +46,13 @@ if [ "$1" = "set" ]; then
 
   case "$ENV" in
     main)
-        if [ "$LOCAL" = "local" ]; then
+      if [ "$LOCAL" = "local" ]; then
         export BASE_URL="http://localhost:8000"
         export DATABASE_URL=postgresql://$(whoami)@localhost:5432/circuitdao
         #echo "Warning: Using local backend for mainnet context. Set ADD_SIG_DATA/FEE_PER_COST manually if needed."
       else
         export BASE_URL="https://api.circuitdao.com"
+        unset DATABASE_URL
       fi
       export ADD_SIG_DATA="ccd5bb71183532bff220ba46c268991a3ff07eb358e8255a65c30a2dce0e5fbb"
       export FEE_PER_COST="fast"
@@ -63,6 +64,7 @@ if [ "$1" = "set" ]; then
         #echo "Warning: Using local backend for testnet context. Set ADD_SIG_DATA/FEE_PER_COST manually if needed."
       else
         export BASE_URL="https://testnet-api.circuitdao.com"
+        unset DATABASE_URL
       fi
       export ADD_SIG_DATA="37a90eb5185a9c4439a91ddc98bbadce7b4feba060d50116a067de66bf236615"
       export FEE_PER_COST="fast"
@@ -72,6 +74,7 @@ if [ "$1" = "set" ]; then
         echo "Warning: 'sim' ignores extra arguments. '$LOCAL' ignored."
       fi
       export BASE_URL="http://localhost:8000"
+      unset DATABASE_URL
       export ADD_SIG_DATA="ccd5bb71183532bff220ba46c268991a3ff07eb358e8255a65c30a2dce0e5fbb"
       ;;
     *)
@@ -79,8 +82,6 @@ if [ "$1" = "set" ]; then
       return
       ;;
   esac
-
-  unset DATABASE_URL
 
 elif [ "$1" = "clear" ]; then
   KEEP_KEY="$2"
