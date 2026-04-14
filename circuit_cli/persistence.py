@@ -27,9 +27,9 @@ class DictStore:
     """
 
     def __init__(self, dir_path, path="state.json", lock_path=".state.lock"):
-        log.info(f"Initializing persistence store at {dir_path}")
         if dir_path is None:
             dir_path = CIRCUIT_DIR
+        log.info(f"Initializing persistence store at {dir_path}")
         self.path = os.path.join(dir_path, path)
         self.lock_path = os.path.join(dir_path, lock_path)
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
